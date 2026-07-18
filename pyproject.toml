@@ -27,11 +27,14 @@ packages = ["src/claimcontext"]
 
 [tool.ruff]
 line-length = 100
-src = ["src"]
+src = ["src", "scripts"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 ignore = []
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/clause_library.py" = ["E501"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["claimcontext"]
@@ -51,4 +54,4 @@ packages = ["claimcontext"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["src", "scripts"]
