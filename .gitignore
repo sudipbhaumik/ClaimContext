@@ -28,5 +28,8 @@ data/documents/claim-docs/*
 !data/documents/claim-notes/.gitkeep
 !data/documents/claim-docs/.gitkeep
 
+# Specs (local planning docs — not for the repo)
+specs/
+
 # OS artifacts
 .DS_Store
