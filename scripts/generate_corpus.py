@@ -87,6 +87,7 @@ class ManifestEntry(BaseModel):
     claim_number: str | None = None
     effective_date: str | None = None
     expiry_date: str | None = None
+    loss_date: str | None = None
     region: str
     assigned_adjuster: str
     lob: str
@@ -359,6 +360,7 @@ Coverage F — Medical Payments:           $5,000 per person
         claim_number=cw.claim_number,
         effective_date=_iso(cw.effective_date),
         expiry_date=_iso(cw.expiry_date),
+        loss_date=_iso(cw.loss_date),
         region=cw.region,
         assigned_adjuster=cw.assigned_adjuster,
         lob=cw.lob,
@@ -386,6 +388,7 @@ def _write_endorsement(cw: ClaimWorld, out_dir: Path) -> ManifestEntry:
         claim_number=cw.claim_number,
         effective_date=_iso(endorsement_date),
         expiry_date=_iso(cw.expiry_date),
+        loss_date=_iso(cw.loss_date),
         region=cw.region,
         assigned_adjuster=cw.assigned_adjuster,
         lob=cw.lob,
@@ -461,6 +464,7 @@ of this notice does not constitute an admission of coverage or liability.
         doc_type="claim_document",
         policy_number=cw.policy_number,
         claim_number=cw.claim_number,
+        loss_date=_iso(cw.loss_date),
         region=cw.region,
         assigned_adjuster=cw.assigned_adjuster,
         lob=cw.lob,
@@ -550,6 +554,7 @@ Authorized payment will reflect applicable deductibles and policy limits.</em></
         doc_type="claim_document",
         policy_number=cw.policy_number,
         claim_number=cw.claim_number,
+        loss_date=_iso(cw.loss_date),
         region=cw.region,
         assigned_adjuster=cw.assigned_adjuster,
         lob=cw.lob,
@@ -606,6 +611,7 @@ will reflect applicable deductibles and policy limits per {cw.policy_number}.
         doc_type="claim_document",
         policy_number=cw.policy_number,
         claim_number=cw.claim_number,
+        loss_date=_iso(cw.loss_date),
         region=cw.region,
         assigned_adjuster=cw.assigned_adjuster,
         lob=cw.lob,
@@ -660,6 +666,7 @@ within 30 days of this letter's date.
         doc_type="claim_document",
         policy_number=cw.policy_number,
         claim_number=cw.claim_number,
+        loss_date=_iso(cw.loss_date),
         region=cw.region,
         assigned_adjuster=cw.assigned_adjuster,
         lob=cw.lob,
@@ -802,6 +809,7 @@ def _write_notes_jsonl(cw: ClaimWorld, out_dir: Path, rng: random.Random) -> Man
         doc_type="claim_note",
         policy_number=cw.policy_number,
         claim_number=cw.claim_number,
+        loss_date=_iso(cw.loss_date),
         region=cw.region,
         assigned_adjuster=cw.assigned_adjuster,
         lob=cw.lob,
