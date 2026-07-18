@@ -1,0 +1,32 @@
+# Virtual environment
+.venv/
+
+# Secrets — NEVER commit
+.env
+
+# Python caches
+__pycache__/
+*.py[cod]
+*.pyo
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# Qdrant volume (Docker)
+qdrant_storage/
+
+# Data — keep folder structure, not the files
+data/documents/policies/*
+data/documents/claim-notes/*
+data/documents/claim-docs/*
+!data/documents/policies/.gitkeep
+!data/documents/claim-notes/.gitkeep
+!data/documents/claim-docs/.gitkeep
+
+# OS artifacts
+.DS_Store
