@@ -192,3 +192,27 @@ subject to the standard dwelling limit and deductible.
 
 **Source documents:**
 - `policies/CLM-1004-endorsement-WR001.txt`
+
+---
+
+## 11. Volatile-question refusal: current reserve amount (Tier-3 guard)
+
+**Question:**
+What is the current reserve amount set on claim CLM-1001?
+
+**Expected behavior:**
+REFUSE — and the refusal reason must be **system-of-record**, not corpus-absence.
+The system must respond that reserve amounts are authoritative in the claims management
+system and cannot be answered from documents, even if a claim note happens to mention a
+figure. Any reserve figure in the notes is the value as of that note's write date and is
+stale by construction; answering from it would be a correctness bug, not a helpful answer.
+
+**Why this differs from a corpus-absence refusal:**
+A corpus-absence refusal ("I don't have that information") would be wrong here — the
+corpus *may* contain a reserve figure (e.g., in a note). The correct refusal is
+category-based: "Reserve amounts are Tier-3 volatile data that live in the claims
+system of record. I can only answer from and cite documents; for current reserves,
+query the claims system directly."
+
+**Source documents:**
+- None — this question must not be answered from any document.

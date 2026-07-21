@@ -187,47 +187,100 @@ CLAIM_WORLDS: list[ClaimWorld] = [
 # ── PDF builder (minimal valid PDF, no library dependency) ────────────────────
 
 
+_LINES_PER_PAGE = 52
+
+
 def _build_pdf(text: str) -> bytes:
-    """Build a minimal valid single-page PDF from plain text."""
+    """Build a minimal valid multi-page PDF from plain text.
+
+    Pages hold _LINES_PER_PAGE lines each. All content is preserved — no
+    truncation. The fixed-width font and line wrapping are intentional; they
+    degrade table column alignment in the rendered PDF, which is the hard
+    layout-extraction case for spec-1a.
+    """
     all_lines: list[str] = []
     for raw in text.split("\n"):
         wrapped = textwrap.wrap(raw, 90) if raw.strip() else [""]
         all_lines.extend(wrapped)
 
-    cmds: list[str] = ["BT", "/F1 10 Tf", "50 750 Td", "14 TL"]
-    for line in all_lines[:52]:
-        safe = line.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)").replace("\r", "")
-        cmds.append(f"({safe}) Tj T*")
-    cmds.append("ET")
-    stream = "\n".join(cmds).encode("latin-1", errors="replace")
+    # Split into pages
+    pages: list[list[str]] = []
+    for i in range(0, max(1, len(all_lines)), _LINES_PER_PAGE):
+        pages.append(all_lines[i : i + _LINES_PER_PAGE])
 
-    o1 = b"1 0 obj\n<</Type /Catalog /Pages 2 0 R>>\nendobj\n"
-    o2 = b"2 0 obj\n<</Type /Pages /Kids [3 0 R] /Count 1>>\nendobj\n"
-    o3 = (
-        b"3 0 obj\n<</Type /Page /Parent 2 0 R /MediaBox [0 0 612 792]"
-        b" /Contents 4 0 R /Resources <</Font <</F1 5 0 R>>>>>>\nendobj\n"
-    )
-    o4 = (
-        f"4 0 obj\n<</Length {len(stream)}>>\nstream\n".encode() + stream + b"\nendstream\nendobj\n"
-    )
-    o5 = b"5 0 obj\n<</Type /Font /Subtype /Type1 /BaseFont /Helvetica>>\nendobj\n"
+    n_pages = len(pages)
+
+    # Object layout:
+    #   1 = Catalog
+    #   2 = Pages (parent)
+    #   3..3+n-1 = Page objects
+    #   3+n..3+2n-1 = Content streams
+    #   3+2n = Font
+    font_obj_num = 3 + 2 * n_pages
+    n_objects = font_obj_num  # objects are 1-indexed; total count = font_obj_num
+
+    def _stream(page_lines: list[str]) -> bytes:
+        cmds: list[str] = ["BT", "/F1 10 Tf", "50 750 Td", "14 TL"]
+        for line in page_lines:
+            safe = (
+                line.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)").replace("\r", "")
+            )
+            cmds.append(f"({safe}) Tj T*")
+        cmds.append("ET")
+        return "\n".join(cmds).encode("latin-1", errors="replace")
 
     header = b"%PDF-1.4\n"
-    objs = [o1, o2, o3, o4, o5]
 
+    # Catalog
+    o_catalog = b"1 0 obj\n<</Type /Catalog /Pages 2 0 R>>\nendobj\n"
+
+    # Pages node — kids are page objects 3..3+n-1
+    kids = " ".join(f"{3 + i} 0 R" for i in range(n_pages))
+    o_pages = f"2 0 obj\n<</Type /Pages /Kids [{kids}] /Count {n_pages}>>\nendobj\n".encode()
+
+    # Page objects and content streams
+    page_objs: list[bytes] = []
+    stream_objs: list[bytes] = []
+    for i in range(n_pages):
+        page_num = 3 + i
+        content_num = 3 + n_pages + i
+        font_ref = font_obj_num
+        page_objs.append(
+            f"{page_num} 0 obj\n"
+            f"<</Type /Page /Parent 2 0 R /MediaBox [0 0 612 792]"
+            f" /Contents {content_num} 0 R"
+            f" /Resources <</Font <</F1 {font_ref} 0 R>>>>>>\n"
+            f"endobj\n".encode()
+        )
+        s = _stream(pages[i])
+        stream_objs.append(
+            f"{content_num} 0 obj\n<</Length {len(s)}>>\nstream\n".encode()
+            + s
+            + b"\nendstream\nendobj\n"
+        )
+
+    # Font
+    font_body = b"<</Type /Font /Subtype /Type1 /BaseFont /Helvetica>>\nendobj\n"
+    o_font = f"{font_obj_num} 0 obj\n".encode() + font_body
+
+    all_objs: list[bytes] = [o_catalog, o_pages] + page_objs + stream_objs + [o_font]
+
+    # xref
     pos = len(header)
     offsets: list[int] = []
-    for o in objs:
+    for o in all_objs:
         offsets.append(pos)
         pos += len(o)
 
     xref_pos = pos
-    xref = b"xref\n0 6\n0000000000 65535 f\r\n"
+    xref = f"xref\n0 {n_objects + 1}\n0000000000 65535 f\r\n".encode()
     for off in offsets:
         xref += f"{off:010d} 00000 n\r\n".encode()
 
-    trailer = f"trailer\n<</Size 6 /Root 1 0 R>>\nstartxref\n{xref_pos}\n%%EOF\n".encode()
-    return header + b"".join(objs) + xref + trailer
+    trailer = (
+        f"trailer\n<</Size {n_objects + 1} /Root 1 0 R>>\nstartxref\n{xref_pos}\n%%EOF\n"
+    ).encode()
+    return header + b"".join(all_objs) + xref + trailer
 
 
 # ── OCR noise ─────────────────────────────────────────────────────────────────
@@ -618,6 +671,63 @@ will reflect applicable deductibles and policy limits per {cw.policy_number}.
     )
 
 
+def _write_estimate_pdf(cw: ClaimWorld, out_dir: Path, rng: random.Random) -> ManifestEntry:
+    """Same fixed-width table content as _write_estimate_txt, output as PDF.
+
+    The 52-line page cap degrades column alignment — that's intentional: this is
+    the hard layout-extraction case spec-1a must prove it handles.
+    """
+    items = _estimate_line_items(cw, rng)
+    total = sum(qty * unit for _, qty, unit in items)
+    inspector = rng.choice(INSPECTOR_NAMES)
+    insp_date = date(cw.loss_date.year, cw.loss_date.month, min(cw.loss_date.day + 5, 28))
+
+    rows = "\n".join(
+        f"  {i + 1:<4} {desc:<50} {qty:<5} ${unit:>10,.2f}   ${qty * unit:>10,.2f}"
+        for i, (desc, qty, unit) in enumerate(items)
+    )
+
+    body = f"""DAMAGE ASSESSMENT / REPAIR ESTIMATE
+
+{"=" * 80}
+Claim Number:        {cw.claim_number}
+Policy Number:       {cw.policy_number}
+Policyholder:        {cw.policyholder_name}
+Inspection Date:     {_fmt_date(insp_date)}
+{"Vehicle:             " + (cw.vehicle or "") if cw.vehicle else ""}
+Inspector:           {inspector}
+Adjuster:            {_adjuster_name(cw.assigned_adjuster)} ({cw.assigned_adjuster})
+{"=" * 80}
+
+LINE ITEMS
+{"─" * 80}
+  No.  Description                                        Qty    Unit Cost        Total
+{"─" * 80}
+{rows}
+{"─" * 80}
+       {"TOTAL (before deductible)":<52}          ${total:>10,.2f}
+{"=" * 80}
+
+NOTE: This estimate is subject to final review and approval. Authorized payment
+will reflect applicable deductibles and policy limits per {cw.policy_number}.
+"""
+
+    fname = f"CLM-{cw.claim_number[-4:]}-estimate.pdf"
+    path = out_dir / "claim-docs" / fname
+    path.write_bytes(_build_pdf(body))
+    return ManifestEntry(
+        file=f"claim-docs/{fname}",
+        doc_id=f"{cw.claim_number}-estimate",
+        doc_type="claim_document",
+        policy_number=cw.policy_number,
+        claim_number=cw.claim_number,
+        loss_date=_iso(cw.loss_date),
+        region=cw.region,
+        assigned_adjuster=cw.assigned_adjuster,
+        lob=cw.lob,
+    )
+
+
 # ── Correspondence letter writers ─────────────────────────────────────────────
 
 
@@ -847,6 +957,9 @@ def generate(out_dir: Path, seed: int = 42) -> list[ManifestEntry]:
         if cw.lifecycle == "mature":
             if cw.claim_number == "CLM-1001":
                 entries.append(_write_estimate_html(cw, out_dir, rng))
+            elif cw.claim_number == "CLM-1003":
+                # PDF estimate — fixed-width table in PDF is the hard layout-extraction case
+                entries.append(_write_estimate_pdf(cw, out_dir, rng))
             elif cw.claim_number == "CLM-1004":
                 # OCR-noised estimate for CLM-1004
                 entries.append(_write_estimate_txt(cw, out_dir, rng, apply_noise=True))
