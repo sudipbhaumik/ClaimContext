@@ -6,6 +6,7 @@ All fields sourced from .env (see .env.example). No secrets in code.
 """
 
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field
@@ -50,6 +51,10 @@ class Settings(BaseSettings):
     # ── Chunking ──────────────────────────────────────────────────────────────
     chunk_size: int = Field(default=512)
     chunk_overlap: int = Field(default=64)
+
+    # ── Ingestion ─────────────────────────────────────────────────────────────
+    ingest_source_dir: Path = Field(default=Path("data/documents"))
+    ingest_hash_store_path: Path = Field(default=Path("data/ingest/.hash_store.json"))
 
     # ── Secrets (optional; absent → feature disabled, not a crash) ────────────
     anthropic_api_key: str | None = Field(default=None)

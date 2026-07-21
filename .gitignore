@@ -31,5 +31,8 @@ data/documents/claim-docs/*
 # Specs (local planning docs — not for the repo)
 specs/
 
+# Ingestion state (hash store, intermediate outputs)
+data/ingest/
+
 # OS artifacts
 .DS_Store
