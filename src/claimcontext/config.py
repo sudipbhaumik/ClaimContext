@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     llm_provider: Literal["ollama", "anthropic", "openai"] = Field(default="ollama")
     llm_model: str = Field(default="llama3.2")
     llm_timeout_seconds: int = Field(default=30)
+    llm_base_url: str = Field(default="http://localhost:11434")  # Ollama daemon URL
 
     # ── Embedding ─────────────────────────────────────────────────────────────
     embedding_model: str = Field(default="BAAI/bge-large-en-v1.5")

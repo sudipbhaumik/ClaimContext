@@ -13,7 +13,7 @@ print(f"\nDocument: {r.doc_id}  ({len(r.document.text.splitlines())} lines)\n")
 for overlap in [0, 64, 256]:
     s = Settings(chunk_overlap=overlap)
     chunks = chunk_document(r.document, s)
-    print(f"{'='*70}")
+    print(f"{'=' * 70}")
     print(f"overlap={overlap}: {len(chunks)} chunk(s)")
     for i, c in enumerate(chunks):
         print(f"\n  chunk {i}  page={c.page}  section={c.section!r}")
