@@ -90,7 +90,10 @@ def _is_heading(line: str, prev_is_sep_or_blank: bool, next_is_sep_or_blank: boo
 
 
 def _chunk_id(doc_id: str, chunk_index: int) -> str:
-    return hashlib.sha256(f"{doc_id}|{chunk_index}".encode()).hexdigest()[:16]
+    # Qdrant requires point IDs to be unsigned integers or UUIDs.
+    # Take the first 32 hex chars of SHA-256 and format as UUID (8-4-4-4-12).
+    h = hashlib.sha256(f"{doc_id}|{chunk_index}".encode()).hexdigest()[:32]
+    return f"{h[:8]}-{h[8:12]}-{h[12:16]}-{h[16:20]}-{h[20:32]}"
 
 
 # ── Pass 1+2: page-cursor scan + heading split ────────────────────────────────
