@@ -27,8 +27,9 @@ import hashlib
 import json
 import logging
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
+from .chunker import chunk_document
 from .extractor import extract_text
 from .models import ExtractedDocument, ExtractResult, SourceDocument
 from .normaliser import normalise
@@ -146,3 +147,62 @@ def run_discover_extract(
         n_errors,
     )
     return results
+
+
+# ── spec-1b: chunk → embed → delete → upsert ─────────────────────────────────
+
+
+def run_chunk_embed_upsert(
+    results: list[ExtractResult],
+    embedder: Any,
+    writer: Any,
+    settings: Any,
+) -> tuple[dict[str, int], int]:
+    """Chunk, embed, and upsert every new/updated document from spec-1a results.
+
+    Ordering for 'updated' documents: chunk → embed → DELETE old chunks → upsert.
+    The delete is the last destructive step. If embedding fails, old chunks remain
+    (stale but present); the document is counted in embed_errors, not failed.
+
+    Returns:
+        chunk_counts: {doc_id: chunk_count} for every successfully ingested doc.
+        embed_errors: count of documents that failed during chunk/embed/upsert.
+    """
+    chunk_counts: dict[str, int] = {}
+    embed_errors = 0
+
+    for r in results:
+        if r.status not in ("new", "updated") or r.document is None:
+            continue
+
+        doc = r.document
+        try:
+            chunks = chunk_document(doc, settings)
+            if not chunks:
+                log.warning("no chunks produced for %s — skipping upsert", doc.doc_id)
+                continue
+
+            vectors = embedder.embed([c.text for c in chunks])
+
+            # Delete AFTER vectors are in hand — old chunks stay if embed fails.
+            if r.status == "updated":
+                writer.delete_chunks_for_doc(doc.doc_id)
+
+            writer.upsert_chunks(chunks, vectors)
+            chunk_counts[doc.doc_id] = len(chunks)
+            log.info(
+                "%s %s → %d chunks",
+                r.status,
+                doc.doc_id,
+                len(chunks),
+            )
+        except Exception as exc:
+            log.error(
+                "chunk/embed/upsert failed for %s: %s",
+                doc.doc_id,
+                exc,
+                exc_info=True,
+            )
+            embed_errors += 1
+
+    return chunk_counts, embed_errors

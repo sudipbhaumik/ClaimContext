@@ -55,6 +55,9 @@ class Settings(BaseSettings):
     # ── Ingestion ─────────────────────────────────────────────────────────────
     ingest_source_dir: Path = Field(default=Path("data/documents"))
     ingest_hash_store_path: Path = Field(default=Path("data/ingest/.hash_store.json"))
+    embedding_batch_size: int = Field(default=32)
+    qdrant_timeout_seconds: int = Field(default=10)
+    qdrant_upsert_batch_size: int = Field(default=64)
 
     # ── Secrets (optional; absent → feature disabled, not a crash) ────────────
     anthropic_api_key: str | None = Field(default=None)
