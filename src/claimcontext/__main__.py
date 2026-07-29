@@ -77,10 +77,17 @@ def _run_ingest(args: argparse.Namespace) -> int:
 def _run_ask(args: argparse.Namespace) -> int:
     from claimcontext.config import get_settings
     from claimcontext.retrieval.errors import IndexStalenessError, LLMError
-    from claimcontext.retrieval.retriever import Retriever
 
     settings = get_settings()
-    retriever = Retriever(settings)
+
+    from claimcontext.retrieval.hybrid_retriever import HybridRetriever
+    from claimcontext.retrieval.retriever import Retriever
+
+    retriever: HybridRetriever | Retriever
+    if settings.retrieval_mode == "hybrid":
+        retriever = HybridRetriever(settings)
+    else:
+        retriever = Retriever(settings)
 
     try:
         retriever.check_index_staleness()
@@ -88,21 +95,28 @@ def _run_ask(args: argparse.Namespace) -> int:
         log.error("index check failed: %s", exc)
         return 1
 
-    top_k = args.top_k if args.top_k is not None else settings.top_k
-    results = retriever.search(args.query, top_k=top_k)
-
     if args.dry_run:
-        # Retrieve only — skip LLM call
+        # Retrieve only — skip reranker and LLM call
+        top_k = args.top_k if args.top_k is not None else settings.top_k
+        results = retriever.search(args.query, top_k=top_k)
         output = [r.model_dump() for r in results]
         print(json.dumps(output, indent=2))
         return 0
 
     from claimcontext.retrieval.ask import ask
     from claimcontext.retrieval.llm_client import LLMClient
+    from claimcontext.retrieval.reranker import Reranker
 
     llm = LLMClient(settings)
+    reranker = Reranker(settings)
     try:
-        result = ask(query=args.query, retriever=retriever, llm=llm, settings=settings)
+        result = ask(
+            query=args.query,
+            retriever=retriever,
+            llm=llm,
+            settings=settings,
+            reranker=reranker,
+        )
     except LLMError as exc:
         log.error("LLM call failed: %s", exc)
         return 1

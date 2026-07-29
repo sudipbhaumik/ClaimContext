@@ -16,6 +16,7 @@ dependencies = [
     "ollama==0.6.2",
     "anthropic==0.120.2",
     "openai==2.50.0",
+    "rank-bm25==0.2.2",
 ]
 
 [project.optional-dependencies]
@@ -59,6 +60,10 @@ warn_return_any = true
 warn_unused_configs = true
 mypy_path = "src"
 packages = ["claimcontext"]
+
+[[tool.mypy.overrides]]
+module = "rank_bm25"
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

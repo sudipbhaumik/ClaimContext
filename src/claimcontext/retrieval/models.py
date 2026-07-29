@@ -40,3 +40,4 @@ class AskResult(BaseModel):
     retrieved_chunks: list[RetrievalResult]  # full top_k for 2b/2c to re-score
     llm_model: str
     prompt_version: str  # filename of prompt template used (§2A.3)
+    refused: bool = False  # True when top rerank score < refuse_threshold (spec-2c)

@@ -46,8 +46,15 @@ class Settings(BaseSettings):
     # ── Retrieval ─────────────────────────────────────────────────────────────
     top_k: int = Field(default=10)
     rrf_k: int = Field(default=60)
+    retrieval_mode: Literal["dense", "hybrid"] = Field(default="hybrid")
+    reranker_model: str = Field(default="BAAI/bge-reranker-base")
     rerank_top_n: int = Field(default=5)
-    refuse_threshold: float = Field(default=0.4)
+    # refuse_threshold: bge-reranker-base outputs sigmoid-scaled [0,1] scores.
+    # Relevant matches score ~0.97+; wrong-but-related passages score ~0.001.
+    # Off-corpus queries score ~0.5 (model uncertainty floor), so threshold must
+    # exceed 0.5 to refuse genuinely unanswerable queries. Default 0.55 is a
+    # conservative starting point — spec-4 golden-set eval calibrates the final value.
+    refuse_threshold: float = Field(default=0.55)
 
     # ── Chunking ──────────────────────────────────────────────────────────────
     chunk_size: int = Field(default=512)
