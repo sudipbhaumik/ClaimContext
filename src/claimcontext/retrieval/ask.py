@@ -216,11 +216,14 @@ def ask(
         )
 
         if top_score < settings.refuse_threshold:
+            # retrieved_chunks is cleared on all refusal paths — the scored list must
+            # not be serialized. Returning it would leak which chunks scored highest
+            # for the query, exposing corpus topology without authorization.
             return AskResult(
                 query=query,
                 answer=_REFUSE_MESSAGE,
                 citations=[],
-                retrieved_chunks=reranked,
+                retrieved_chunks=[],
                 llm_model=settings.llm_model,
                 prompt_version=_PROMPT_VERSION,
                 refused=True,

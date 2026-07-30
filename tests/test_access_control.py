@@ -650,3 +650,97 @@ def test_proof4b_audit_indistinguishability(caplog) -> None:
     print(
         "\n  ✓ Both cases: decision=allowed — cross-boundary probe indistinguishable from nonsense"
     )
+
+
+@pytest.mark.retrieval
+def test_proof5_three_way_response_indistinguishability() -> None:
+    """§6B: the user-facing AskResult must be byte-identical across all refusal causes.
+
+    Three causes, all from ADJ-014:
+      (a) cross-boundary SW target  — filter holds, NE noise returned, reranker refuses
+      (b) in-scope low-content      — NE content returned, reranker refuses on low score
+      (c) nonexistent claim         — NE nearest-neighbors returned, reranker refuses
+
+    An attacker sees the serialized AskResult. If any structural field differs between
+    these cases, they can infer whether the record exists or is in another region.
+    Fields checked: refused, answer, citations, retrieved_chunks.
+    """
+    from claimcontext.config import Settings
+    from claimcontext.retrieval.ask import _REFUSE_MESSAGE, ask
+    from claimcontext.retrieval.hybrid_retriever import HybridRetriever
+    from claimcontext.retrieval.reranker import Reranker
+
+    settings = Settings()
+    retriever = HybridRetriever(settings)
+    retriever.check_index_staleness()
+    reranker = Reranker(settings)
+
+    principal = Principal(adjuster_id="ADJ-014", region="northeast")
+
+    # All three queries must trigger the reranker refuse gate (score < refuse_threshold).
+    # The domain-mismatch pattern (section-reference queries like "Section 4.2") is known
+    # to score ~0.03 on bge-reranker-base for this corpus — well below the 0.55 gate.
+    # This ensures the comparison is between refused responses, not allowed vs refused.
+    cases = [
+        # (a) cross-boundary: ADJ-014 targets SW-only identifier — filter holds,
+        #     NE noise returned, reranker refuses on low score (cross-corpus query)
+        ("cross-boundary SW target", "wind-driven rain endorsement WR-001 section 4.2"),
+        # (b) in-scope clause reference: ADJ-014 queries their own NE corpus but with
+        #     a section identifier that doesn't appear verbatim — reranker refuses
+        ("in-scope clause reference", "policy deductible Section 4.2 limit clause"),
+        # (c) nonexistent claim: CLM-9999 doesn't exist anywhere — NE nearest-neighbors
+        #     returned, reranker refuses on low relevance score
+        ("nonexistent claim", "CLM-9999 hail damage Section 4.2"),
+    ]
+
+    print("\nProof 5 — THREE-WAY RESPONSE INDISTINGUISHABILITY (§6B)")
+
+    with patch("claimcontext.retrieval.ask._load_prompt", return_value="answer from sources"):
+        responses = {}
+        for label, query in cases:
+            mock_llm = MagicMock()
+            mock_llm.complete.return_value = "answer"
+            r = ask(
+                query=query,
+                retriever=retriever,
+                llm=mock_llm,
+                settings=settings,
+                reranker=reranker,
+                principal=principal,
+            )
+            responses[label] = r
+            print(f"\n  [{label}]")
+            print(f"    refused={r.refused}")
+            print(f"    citations={len(r.citations)}")
+            print(f"    retrieved_chunks={len(r.retrieved_chunks)}")
+            print(f"    answer={r.answer[:60]!r}")
+
+    print()
+    labels = list(responses.keys())
+    for i in range(len(labels)):
+        for j in range(i + 1, len(labels)):
+            a, b = responses[labels[i]], responses[labels[j]]
+            diffs = []
+            if a.refused != b.refused:
+                diffs.append(f"refused: {a.refused} vs {b.refused}")
+            if a.answer != b.answer:
+                diffs.append("answer differs")
+            if len(a.citations) != len(b.citations):
+                diffs.append(f"citations: {len(a.citations)} vs {len(b.citations)}")
+            if len(a.retrieved_chunks) != len(b.retrieved_chunks):
+                diffs.append(
+                    f"retrieved_chunks: {len(a.retrieved_chunks)}"
+                    f" vs {len(b.retrieved_chunks)}"
+                )
+            assert not diffs, (
+                f"Response differs between {labels[i]!r} and {labels[j]!r}: {diffs}. "
+                "Structural difference is a §6B disclosure channel."
+            )
+
+    for label, r in responses.items():
+        assert r.refused is True, f"{label}: expected refused=True"
+        assert r.answer == _REFUSE_MESSAGE, f"{label}: unexpected answer"
+        assert r.citations == [], f"{label}: citations must be empty on refusal"
+        assert r.retrieved_chunks == [], f"{label}: retrieved_chunks must be empty on refusal"
+
+    print("  ✓ All three: refused=True, citations=[], retrieved_chunks=[], same answer")
