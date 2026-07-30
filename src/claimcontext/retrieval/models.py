@@ -41,3 +41,4 @@ class AskResult(BaseModel):
     llm_model: str
     prompt_version: str  # filename of prompt template used (§2A.3)
     refused: bool = False  # True when top rerank score < refuse_threshold (spec-2c)
+    adjuster_id: str | None = None  # Principal.adjuster_id when entitlement was applied (spec-3)

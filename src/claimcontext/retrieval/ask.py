@@ -20,9 +20,12 @@ already knows exactly which chunks were surfaced.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from pathlib import Path
 
+from claimcontext.auth.entitlement import EntitlementScope, build_entitlement_scope
+from claimcontext.auth.models import Principal
 from claimcontext.config import Settings
 from claimcontext.retrieval.hybrid_retriever import HybridRetriever
 from claimcontext.retrieval.llm_client import LLMClient
@@ -87,25 +90,111 @@ def _load_prompt(prompts_dir: str) -> str:
 # ── Step 3–5: ask() — retrieve → rerank → refuse → context → LLM → AskResult ─
 
 
+def _query_hash(query: str) -> str:
+    """SHA-256 prefix of the query for audit logs.
+
+    Keeps PII out of the general log while preserving correlation (repeat denied
+    attempts produce the same hash). The raw query is NOT logged here.
+
+    Production note: a restricted audit store that does retain the raw query (for
+    security investigations) would be a separate, access-controlled log sink — not
+    this general application log.
+    """
+    return hashlib.sha256(query.encode()).hexdigest()[:16]
+
+
+def _audit(
+    *,
+    adjuster_id: str,
+    region: str,
+    query_hash: str,
+    chunks_retrieved: int,
+    decision: str,
+) -> None:
+    log.info(
+        "ACCESS adjuster=%r region=%r query_hash=%s chunks=%d decision=%s",
+        adjuster_id,
+        region,
+        query_hash,
+        chunks_retrieved,
+        decision,
+    )
+
+
 def ask(
     query: str,
     retriever: Retriever | HybridRetriever,
     llm: LLMClient,
     settings: Settings,
     reranker: Reranker | None = None,
+    principal: Principal | None = None,
 ) -> AskResult:
     """Retrieve top_k chunks, rerank, apply refuse gate, call LLM, return cited answer.
 
-    reranker is optional — if None, the pipeline skips reranking and refuse gate
-    (useful for testing or when rerank is disabled). When provided, it re-scores
-    the fused candidate list and filters to rerank_top_n before the LLM call.
+    principal — when provided, builds entitlement scope and filters both retrieval
+    paths before fusion. Identity comes ONLY from this argument, never from the query
+    string. A query claiming a different adjuster identity is ignored.
+
+    reranker is optional — if None, the pipeline skips reranking and refuse gate.
 
     Citations are built from the final reranked (or raw) results — not from LLM output.
     """
+    # ── Entitlement resolution (spec-3) ──────────────────────────────────────
+    # Single call to build_entitlement_scope() produces both the Qdrant filter (dense)
+    # and the allowed_ids set (sparse) from the same scope — they cannot diverge.
+    # Identity comes from `principal`, never from `query`.
+    scope: EntitlementScope | None = None
+    query_filter: object = None
+    allowed_ids: frozenset[str] | None = None
+
+    if principal is not None:
+        scope = build_entitlement_scope(principal)
+        query_filter = scope.as_filter()
+        allowed_ids = scope.collect_allowed_ids(settings.qdrant_url, settings.qdrant_collection)
+
     # ── Step 3: retrieve ──────────────────────────────────────────────────────
     # Fetch rrf_fetch_k candidates when reranking, otherwise top_k.
     fetch_k = min(settings.top_k * 3, 30) if reranker is not None else settings.top_k
-    results = retriever.search(query, top_k=fetch_k)
+    results = retriever.search(
+        query, top_k=fetch_k, query_filter=query_filter, allowed_ids=allowed_ids
+    )
+
+    # ── Entitlement: refuse on zero entitled chunks (spec-3) ─────────────────
+    # When entitlement is active and all chunks were filtered out, refuse without
+    # disclosing whether the record exists. The response shape is identical to a
+    # weak-retrieval refusal — same message, same fields, no structural signal.
+    # An unhandled empty-list exception here would itself be a disclosure (stack trace
+    # may mention claim IDs); this path catches it before rerank or LLM is reached.
+    if principal is not None and scope is not None:
+        qhash = _query_hash(query)
+        if not results:
+            _audit(
+                adjuster_id=principal.adjuster_id,
+                region=principal.region,
+                query_hash=qhash,
+                chunks_retrieved=0,
+                decision="denied",
+            )
+            return AskResult(
+                query=query,
+                answer=_REFUSE_MESSAGE,
+                citations=[],
+                retrieved_chunks=[],
+                llm_model=settings.llm_model,
+                prompt_version=_PROMPT_VERSION,
+                refused=True,
+                adjuster_id=principal.adjuster_id,
+            )
+
+    # ── Audit log: allowed path ───────────────────────────────────────────────
+    if principal is not None:
+        _audit(
+            adjuster_id=principal.adjuster_id,
+            region=principal.region,
+            query_hash=_query_hash(query),
+            chunks_retrieved=len(results),
+            decision="allowed",
+        )
 
     log.info(
         "ask: query=%r fetched=%d reranker=%s",
@@ -135,6 +224,7 @@ def ask(
                 llm_model=settings.llm_model,
                 prompt_version=_PROMPT_VERSION,
                 refused=True,
+                adjuster_id=principal.adjuster_id if principal else None,
             )
 
         # Keep only rerank_top_n for the LLM context
@@ -163,4 +253,5 @@ def ask(
         retrieved_chunks=results,
         llm_model=settings.llm_model,
         prompt_version=_PROMPT_VERSION,
+        adjuster_id=principal.adjuster_id if principal else None,
     )

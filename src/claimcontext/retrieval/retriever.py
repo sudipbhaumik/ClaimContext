@@ -71,11 +71,13 @@ class Retriever:
         query: str,
         top_k: int | None = None,
         query_filter: object = None,  # qdrant_client.models.Filter | None
+        allowed_ids: frozenset[str] | None = None,  # ignored — dense uses query_filter
     ) -> list[RetrievalResult]:
         """Embed query and run dense vector search over Qdrant.
 
         query_filter is passed through to Qdrant unchanged (None = no filter).
-        spec-3 will inject an entitlement filter here without touching this method.
+        allowed_ids is accepted for interface compatibility with HybridRetriever but
+        is not used — dense-side entitlement is handled by query_filter at the store.
         """
         k = top_k if top_k is not None else self._settings.top_k
 

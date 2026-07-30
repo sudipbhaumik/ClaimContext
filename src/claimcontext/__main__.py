@@ -80,6 +80,23 @@ def _run_ask(args: argparse.Namespace) -> int:
 
     settings = get_settings()
 
+    # ── Entitlement (spec-3) ──────────────────────────────────────────────────
+    # Identity comes from --adjuster-id flag, not from the query text.
+    # resolve_principal() raises AuthorizationError on unknown IDs — fail fast.
+    principal = None
+    if args.adjuster_id is not None:
+        from claimcontext.auth.errors import AuthorizationError
+        from claimcontext.auth.resolver import resolve_principal
+
+        try:
+            principal = resolve_principal(args.adjuster_id)
+        except AuthorizationError as exc:
+            log.error("auth failed: %s", exc)
+            return 1
+        log.info(
+            "principal resolved: adjuster=%r region=%r", principal.adjuster_id, principal.region
+        )
+
     from claimcontext.retrieval.hybrid_retriever import HybridRetriever
     from claimcontext.retrieval.retriever import Retriever
 
@@ -116,6 +133,7 @@ def _run_ask(args: argparse.Namespace) -> int:
             llm=llm,
             settings=settings,
             reranker=reranker,
+            principal=principal,
         )
     except LLMError as exc:
         log.error("LLM call failed: %s", exc)
@@ -145,6 +163,12 @@ def main(argv: list[str] | None = None) -> int:
         "--dry-run",
         action="store_true",
         help="Retrieve only — print chunks, skip LLM call",
+    )
+    ask_parser.add_argument(
+        "--adjuster-id",
+        default=None,
+        help="Apply entitlement filter for this adjuster (e.g. ADJ-014). "
+        "Identity comes from the mock auth resolver, not the query text.",
     )
 
     args = parser.parse_args(argv)
