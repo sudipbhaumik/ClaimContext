@@ -729,8 +729,7 @@ def test_proof5_three_way_response_indistinguishability() -> None:
                 diffs.append(f"citations: {len(a.citations)} vs {len(b.citations)}")
             if len(a.retrieved_chunks) != len(b.retrieved_chunks):
                 diffs.append(
-                    f"retrieved_chunks: {len(a.retrieved_chunks)}"
-                    f" vs {len(b.retrieved_chunks)}"
+                    f"retrieved_chunks: {len(a.retrieved_chunks)} vs {len(b.retrieved_chunks)}"
                 )
             assert not diffs, (
                 f"Response differs between {labels[i]!r} and {labels[j]!r}: {diffs}. "

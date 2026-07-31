@@ -67,6 +67,24 @@ class Settings(BaseSettings):
     qdrant_timeout_seconds: int = Field(default=10)
     qdrant_upsert_batch_size: int = Field(default=64)
 
+    # ── Eval (spec-4) ─────────────────────────────────────────────────────────
+    eval_golden_set_path: str = Field(default="data/eval/golden_set_v1.jsonl")
+    eval_golden_set_version: str = Field(default="v1")
+    eval_context_precision_threshold: float = Field(default=0.60)
+    eval_context_recall_threshold: float = Field(default=0.60)
+    eval_faithfulness_threshold: float = Field(default=0.65)
+    eval_answer_relevance_threshold: float = Field(default=0.65)
+    eval_refusal_accuracy_threshold: float = Field(default=1.0)
+    tier3_refusal_marker: str = Field(default="claims system")
+    # Judge LLM for RAGAS — use a different family from the answer LLM to avoid
+    # self-preference bias. Default: ollama/mistral (local, different family from
+    # llama3.2). Set eval_ragas_llm_provider=openai + OPENAI_API_KEY for GPT-4o.
+    eval_ragas_llm_provider: Literal["openai", "anthropic", "ollama"] = Field(default="ollama")
+    eval_ragas_llm_model: str = Field(default="mistral")
+    eval_ragas_llm_base_url: str = Field(default="http://localhost:11434/v1")
+    # Embedding model for RAGAS AnswerRelevancy metric
+    eval_ragas_embed_model: str = Field(default="BAAI/bge-small-en-v1.5")
+
     # ── Secrets (optional; absent → feature disabled, not a crash) ────────────
     anthropic_api_key: str | None = Field(default=None)
     openai_api_key: str | None = Field(default=None)

@@ -33,7 +33,12 @@ class Reranker:
             from sentence_transformers import CrossEncoder
 
             log.info("loading reranker model %s", self._model_name)
-            self._model = CrossEncoder(self._model_name)
+            # Force CPU: MPS (Apple Silicon) produces non-deterministic float results
+            # for cross-encoder predict(), causing the same query to score differently
+            # across process invocations. A score of 0.487 in one run and 0.563 in the
+            # next would flip the refuse gate — unacceptable in a regulated domain.
+            # CPU is slower but deterministic; the reranker is not on the hot path.
+            self._model = CrossEncoder(self._model_name, device="cpu")
 
     def rerank(
         self,

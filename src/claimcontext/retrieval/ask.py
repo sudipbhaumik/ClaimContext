@@ -47,6 +47,66 @@ _REFUSE_MESSAGE = (
     "to a supervisor."
 )
 
+# Tier-3 volatile-field guard (§6B / CLAUDE.md §2A.4).
+#
+# Rule: never assert current claim status, payment amounts, or reserve values as fact.
+# These are authoritative, frequently-updated values that live in the claims system of
+# record — not in the document corpus. Stating them from corpus snapshots risks presenting
+# stale data as current.
+#
+# Design: this is a coarse query-level heuristic — it pattern-matches likely intent before
+# retrieval. This is a defensible POC simplification. The production design would enforce
+# at the answer layer (classify intent from the generated response rather than the raw
+# query), which is more robust to paraphrase variation. The known weaknesses:
+#   - Leaky: "what does the policy say about payment schedules?" contains "payment" but
+#     is a legitimate document question — the patterns below try to target volatile-value
+#     asks specifically, but edge cases exist.
+#   - Over-broad: exotic phrasings ("payout so far?", "current reserve?") may slip through.
+# Both failure modes are acceptable for a POC; fix in production by moving to answer-layer
+# classification.
+#
+# Message contract: must not disclose whether the claim exists, what the value is, or
+# what system holds it in a claim-specific way. "Questions about current claim status,
+# amounts, or reserves" is generic — it does not say "CLM-1001 exists and has a reserve."
+_TIER3_REFUSE_MESSAGE = (
+    "Questions about current claim status, payment amounts, or reserve values are "
+    "managed in the claims system of record and cannot be answered from the document "
+    "corpus. Please refer to the claims management system directly."
+)
+
+# Patterns that indicate a Tier-3 volatile-value query.
+# Ordered from most specific to least to reduce false positives.
+_TIER3_PATTERNS = [
+    "how much has been paid",
+    "how much was paid",
+    "amount paid",
+    "total paid",
+    "payment amount",
+    "payment history",
+    "what is the reserve",
+    "what's the reserve",
+    "current reserve",
+    "reserve amount",
+    "reserve on",
+    "claim status",
+    "status of the claim",
+    "is the claim open",
+    "is the claim closed",
+    "claim been closed",
+    "claim been settled",
+]
+
+
+def _is_tier3_query(query: str) -> bool:
+    """Coarse heuristic: does this query likely ask for a volatile Tier-3 value?
+
+    Matches against a fixed pattern list. False-positive risk on document questions
+    that share surface vocabulary (e.g. "payment schedule" in a policy). Production
+    should enforce at the answer layer instead.
+    """
+    q = query.lower()
+    return any(p in q for p in _TIER3_PATTERNS)
+
 
 # ── Step 1: Citation construction ─────────────────────────────────────────────
 # Pure data-shaping from chunk payload metadata. No LLM, no I/O — just picking
@@ -139,6 +199,27 @@ def ask(
 
     Citations are built from the final reranked (or raw) results — not from LLM output.
     """
+    # ── Tier-3 volatile-field guard (§6B / CLAUDE.md §2A.4) ─────────────────
+    # Intercepts queries that likely ask for current claim status, payment amounts,
+    # or reserve values — volatile fields that live in the claims system of record,
+    # not the document corpus. Runs before retrieval: no corpus access occurs, so
+    # no existence information is disclosed. The response shape is refused=True with
+    # citations=[] and retrieved_chunks=[], indistinguishable from other refusals at
+    # the structural level. The message routes to the system of record without naming
+    # any specific claim or value (§6B non-disclosure constraint).
+    if _is_tier3_query(query):
+        log.info("ask: tier3 guard fired for query_hash=%s", _query_hash(query))
+        return AskResult(
+            query=query,
+            answer=_TIER3_REFUSE_MESSAGE,
+            citations=[],
+            retrieved_chunks=[],
+            llm_model=settings.llm_model,
+            prompt_version=_PROMPT_VERSION,
+            refused=True,
+            adjuster_id=principal.adjuster_id if principal else None,
+        )
+
     # ── Entitlement resolution (spec-3) ──────────────────────────────────────
     # Single call to build_entitlement_scope() produces both the Qdrant filter (dense)
     # and the allowed_ids set (sparse) from the same scope — they cannot diverge.

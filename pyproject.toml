@@ -17,6 +17,8 @@ dependencies = [
     "anthropic==0.120.2",
     "openai==2.50.0",
     "rank-bm25==0.2.2",
+    "ragas==0.4.3",
+    "langchain-community>=0.3",
 ]
 
 [project.optional-dependencies]
@@ -65,11 +67,16 @@ packages = ["claimcontext"]
 module = "rank_bm25"
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+module = ["ragas", "ragas.*", "instructor", "langchain_community.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src", "scripts"]
 markers = [
     "retrieval: live Qdrant + optional Ollama proofs (spec-2a)",
+    "eval: live eval harness proofs — requires Qdrant, Ollama, and OPENAI_API_KEY (spec-4)",
 ]
 
 [dependency-groups]

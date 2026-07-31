@@ -1,4 +1,4 @@
-.PHONY: install lint format typecheck test check up down generate
+.PHONY: install lint format typecheck test check up down generate eval eval-calibrate
 
 install:
 	uv sync --extra dev
@@ -19,6 +19,12 @@ check: lint format typecheck test
 
 generate:
 	uv run python scripts/generate_corpus.py
+
+eval:
+	uv run pytest tests/test_eval_harness.py -m eval -v -s
+
+eval-calibrate:
+	uv run python -m claimcontext.eval.calibration
 
 up:
 	docker compose up -d
