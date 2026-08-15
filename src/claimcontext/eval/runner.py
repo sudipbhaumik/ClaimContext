@@ -28,6 +28,7 @@ log = logging.getLogger(__name__)
 
 
 def load_golden_set(path: str) -> list[GoldenEntry]:
+    print(f"runner.py, load_golden_set, read golden set file executing : path={path}")
     entries = []
     with open(path, encoding="utf-8") as f:
         for line in f:
@@ -35,6 +36,10 @@ def load_golden_set(path: str) -> list[GoldenEntry]:
             if line:
                 entries.append(GoldenEntry.model_validate_json(line))
     log.info("loaded %d golden entries from %s", len(entries), path)
+    print(
+        f"runner.py, load_golden_set, read golden set file executing : "
+        f"loaded {len(entries)} entries"
+    )
     return entries
 
 
@@ -45,13 +50,26 @@ def run_eval(
     reranker: Reranker | None = None,
 ) -> EvalReport:
     """Run the full harness: load golden set → ask() per entry → score → report."""
+    print("runner.py, run_eval, start eval run executing : begin")
     entries = load_golden_set(settings.eval_golden_set_path)
     results: list[EvalResult] = []
 
     for entry in entries:
         log.info("eval entry=%s behavior=%s", entry.entry_id, entry.expected_behavior)
+        print(
+            f"runner.py, run_eval, resolve_principal for entry={entry.entry_id} executing : "
+            f"adjuster_id={entry.adjuster_id}"
+        )
         principal = _resolve(entry.adjuster_id)
+        print(
+            f"runner.py, run_eval, resolve_principal for entry={entry.entry_id} executing : "
+            f"principal={principal}"
+        )
 
+        print(
+            f"runner.py, run_eval, ask() for entry={entry.entry_id} executing : "
+            f"question={entry.question[:80]!r}"
+        )
         try:
             result = ask(
                 query=entry.question,
@@ -61,8 +79,15 @@ def run_eval(
                 reranker=reranker,
                 principal=principal,
             )
+            print(
+                f"runner.py, run_eval, ask() for entry={entry.entry_id} executing : "
+                f"refused={result.refused} answer={result.answer[:100]!r}"
+            )
         except Exception as exc:
             log.error("ask() failed for entry %s: %s", entry.entry_id, exc)
+            print(
+                f"runner.py, run_eval, ask() for entry={entry.entry_id} executing : ERROR={exc!r}"
+            )
             # Build a synthetic refused result so the run completes
             result = AskResult(
                 query=entry.question,
@@ -76,6 +101,10 @@ def run_eval(
             )
 
         correct = is_correct_outcome(entry, result, settings.tier3_refusal_marker)
+        print(
+            f"runner.py, run_eval, is_correct_outcome for entry={entry.entry_id} executing : "
+            f"correct={correct}"
+        )
 
         is_refusal_entry = entry.expected_behavior in (
             ExpectedBehavior.REFUSE,
@@ -95,7 +124,13 @@ def run_eval(
         )
         results.append(eval_result)
 
-    return _build_report(settings, results)
+    print("runner.py, run_eval, build final report executing : calling _build_report")
+    report = _build_report(settings, results)
+    print(
+        f"runner.py, run_eval, build final report executing : "
+        f"gate_passed={report.gate_passed} refusal_accuracy={report.refusal_accuracy:.3f}"
+    )
+    return report
 
 
 def _resolve(adjuster_id: str) -> Principal:
@@ -104,10 +139,15 @@ def _resolve(adjuster_id: str) -> Principal:
 
 def _build_report(settings: Settings, results: list[EvalResult]) -> EvalReport:
     """Aggregate results into EvalReport. RAGAS metrics must be populated first."""
+    print("runner.py, _build_report, aggregate report executing : begin")
     # Refusal accuracy
     refusal_entries = [r for r in results if r.expected_behavior != ExpectedBehavior.ANSWER]
     correct_refusals = sum(1 for r in refusal_entries if r.refusal_correct)
     refusal_accuracy = correct_refusals / len(refusal_entries) if refusal_entries else 1.0
+    print(
+        f"runner.py, _build_report, compute refusal_accuracy executing : "
+        f"{correct_refusals}/{len(refusal_entries)}={refusal_accuracy:.3f}"
+    )
 
     # Aggregate RAGAS metrics from ANSWER entries that passed
     scored = [
@@ -126,6 +166,11 @@ def _build_report(settings: Settings, results: list[EvalResult]) -> EvalReport:
     mean_cr = _mean([r.context_recall for r in scored])
     mean_f = _mean([r.faithfulness for r in scored])
     mean_ar = _mean([r.answer_relevance for r in scored])
+    print(
+        f"runner.py, _build_report, aggregate RAGAS means executing : "
+        f"scored_entries={len(scored)} cp={mean_cp:.3f} cr={mean_cr:.3f} "
+        f"f={mean_f:.3f} ar={mean_ar:.3f}"
+    )
 
     # Gate evaluation
     gate_failures: list[str] = []
@@ -141,6 +186,11 @@ def _build_report(settings: Settings, results: list[EvalResult]) -> EvalReport:
 
     if refusal_accuracy < settings.eval_refusal_accuracy_threshold:
         gate_failures.append("refusal_accuracy")
+
+    print(
+        f"runner.py, _build_report, evaluate CI gate executing : "
+        f"gate_passed={len(gate_failures) == 0} gate_failures={gate_failures}"
+    )
 
     prompt_versions = {
         r.ask_result.prompt_version for r in results if r.ask_result.prompt_version != "error"
