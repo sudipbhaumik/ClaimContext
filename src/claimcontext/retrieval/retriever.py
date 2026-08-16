@@ -68,6 +68,10 @@ class Retriever:
 
         log.debug("index staleness check passed (model=%s)", stored_model)
 
+    def warm_up(self) -> None:
+        """Force the embedding model to load now, not on first real query."""
+        self._embedder.warm_up()
+
     def search(
         self,
         query: str,

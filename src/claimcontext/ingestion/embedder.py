@@ -34,6 +34,12 @@ class Embedder:
             self._model = SentenceTransformer(self._model_name)
         return self._model
 
+    def warm_up(self) -> None:
+        """Force the model to load now, not on first real embed() call.
+        Same effect as calling embed() once — exposed as its own method so
+        callers (e.g. FastAPI startup) don't need a throwaway text."""
+        self._load()
+
     @property
     def dim(self) -> int:
         d = self._load().get_sentence_embedding_dimension()

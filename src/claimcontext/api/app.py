@@ -69,6 +69,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     llm = LLMClient(settings)
     reranker = Reranker(settings)
 
+    # Embedder/Reranker construction above is cheap — the actual model
+    # weights are lazy-loaded on first use. Without warming them up here,
+    # /ready would report "ready" the moment Qdrant responds, while the
+    # first real /ask still pays a one-time ~tens-of-seconds weight-load
+    # cost /ready never surfaced. Warming up here means "ready" and
+    # "actually fast" become the same claim.
+    log.info("startup: warming up embedding + reranker models")
+    retriever.warm_up()
+    reranker.warm_up()
+
     app.state.claimcontext = AppState(
         settings=settings, retriever=retriever, llm=llm, reranker=reranker
     )

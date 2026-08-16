@@ -32,6 +32,10 @@ class HybridRetriever:
         self._dense.check_index_staleness()
         self._sparse.build()
 
+    def warm_up(self) -> None:
+        """Force the embedding model to load now, not on first real query."""
+        self._dense.warm_up()
+
     def search(
         self,
         query: str,

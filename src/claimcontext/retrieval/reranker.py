@@ -40,6 +40,10 @@ class Reranker:
             # CPU is slower but deterministic; the reranker is not on the hot path.
             self._model = CrossEncoder(self._model_name, device="cpu")
 
+    def warm_up(self) -> None:
+        """Force the model to load now, not on first real rerank() call."""
+        self._load()
+
     def rerank(
         self,
         query: str,
