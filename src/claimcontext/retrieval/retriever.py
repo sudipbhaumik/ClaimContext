@@ -50,7 +50,8 @@ class Retriever:
         if not results:
             raise IndexStalenessError(
                 f"index is empty (collection={self._settings.qdrant_collection!r}) — "
-                "run ingestion first: python -m claimcontext"
+                "run ingestion first: python -m claimcontext",
+                reason="empty",
             )
 
         payload = results[0].payload or {}
@@ -61,7 +62,8 @@ class Retriever:
             raise IndexStalenessError(
                 f"index built with embedding_model={stored_model!r}, "
                 f"config says {config_model!r} — reindex required: "
-                "delete data/ingest/.hash_store.json and re-run python -m claimcontext"
+                "delete data/ingest/.hash_store.json and re-run python -m claimcontext",
+                reason="model_mismatch",
             )
 
         log.debug("index staleness check passed (model=%s)", stored_model)

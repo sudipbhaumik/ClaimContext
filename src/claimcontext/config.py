@@ -113,6 +113,10 @@ class Settings(BaseSettings):
     # Embedding model for RAGAS AnswerRelevancy metric
     eval_ragas_embed_model: str = Field(default="BAAI/bge-small-en-v1.5")
 
+    # ── API (spec-7a) ─────────────────────────────────────────────────────────
+    api_host: str = Field(default="0.0.0.0")
+    api_port: int = Field(default=8000)
+
     # ── Secrets (optional; absent → feature disabled, not a crash) ────────────
     anthropic_api_key: str | None = Field(default=None)
     openai_api_key: str | None = Field(default=None)
