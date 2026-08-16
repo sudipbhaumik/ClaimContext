@@ -39,6 +39,13 @@ class Settings(BaseSettings):
     llm_timeout_seconds: int = Field(default=30)
     llm_base_url: str = Field(default="http://localhost:11434")  # Ollama daemon URL
 
+    # ── Agent orchestrator (spec-5a) ────────────────────────────────────────────
+    agent_max_sub_queries: int = Field(default=4)
+    # Routing/decomposition/scope decisions are cheaper than answer generation —
+    # default to the same model as llm_model, but allow a distinct (e.g. smaller,
+    # faster) model to be configured without touching business logic (§2A.2).
+    agent_model: str = Field(default="llama3.2")
+
     # ── Embedding ─────────────────────────────────────────────────────────────
     embedding_model: str = Field(default="BAAI/bge-large-en-v1.5")
     chunker_version: str = Field(default="v1")

@@ -395,6 +395,8 @@ source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
     { name = "langchain-community" },
+    { name = "langchain-core" },
+    { name = "langgraph" },
     { name = "ollama" },
     { name = "openai" },
     { name = "pydantic" },
@@ -429,6 +431,8 @@ requires-dist = [
     { name = "anthropic", specifier = "==0.120.2" },
     { name = "black", marker = "extra == 'dev'", specifier = "==26.5.1" },
     { name = "langchain-community", specifier = ">=0.3" },
+    { name = "langchain-core", specifier = ">=1.5.2" },
+    { name = "langgraph", specifier = ">=1.2.10" },
     { name = "mypy", marker = "extra == 'dev'", specifier = "==2.3.0" },
     { name = "ollama", specifier = "==0.6.2" },
     { name = "openai", specifier = "==2.50.0" },

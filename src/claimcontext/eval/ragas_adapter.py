@@ -196,8 +196,7 @@ def score_with_ragas(report: EvalReport, settings: Settings) -> EvalReport:
     )
     embeddings = _build_embeddings(settings)
     print(
-        "ragas_adapter.py, _build_embeddings, build embeddings client executing : "
-        "embeddings ready"
+        "ragas_adapter.py, _build_embeddings, build embeddings client executing : embeddings ready"
     )
 
     cp_m = ContextPrecision(llm=judge_llm)
