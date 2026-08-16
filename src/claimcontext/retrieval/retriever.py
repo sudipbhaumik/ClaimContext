@@ -108,6 +108,9 @@ class Retriever:
                     text=p.get("text", ""),
                     embedding_model=p.get("embedding_model", ""),
                     chunker_version=p.get("chunker_version", ""),
+                    effective_date=p.get("effective_date"),
+                    expiry_date=p.get("expiry_date"),
+                    loss_date=p.get("loss_date"),
                 )
             )
 

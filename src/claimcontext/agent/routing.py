@@ -35,6 +35,7 @@ from typing import Literal
 
 from qdrant_client import QdrantClient
 from qdrant_client.models import FieldCondition, Filter, MatchValue
+from tenacity import Retrying, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from claimcontext.auth.models import Principal
 from claimcontext.config import Settings
@@ -42,6 +43,7 @@ from claimcontext.retrieval.ask import (  # noqa: PLC2701 — intentional reuse,
     _audit,
     _query_hash,
 )
+from claimcontext.retrieval.errors import LLMError
 from claimcontext.retrieval.llm_client import LLMClient
 
 log = logging.getLogger(__name__)
@@ -164,7 +166,34 @@ def _is_cross_entitlement(query: str, principal: Principal, settings: Settings) 
     return all_cross
 
 
-def _is_in_scope(query: str, llm: LLMClient) -> bool:
+def _call_llm_with_retry(system: str, user: str, llm: LLMClient, settings: Settings) -> str:
+    """Retry an agent-internal LLM call (scope check, multi-part check, decompose)
+    on LLMError, bounded by settings.agent_retry_attempts (spec-5b hardening).
+
+    Uses a runtime Retrying object, not a static @retry decorator (the codebase's
+    existing pattern in qdrant_writer.py), because the retry count must come from
+    settings — config, not a hardcoded magic number (CLAUDE.md §2A.2).
+    """
+    last_error: LLMError | None = None
+    for attempt in Retrying(
+        stop=stop_after_attempt(settings.agent_retry_attempts),
+        wait=wait_exponential(multiplier=1, min=1, max=4),
+        retry=retry_if_exception_type(LLMError),
+        reraise=True,
+    ):
+        with attempt:
+            try:
+                return llm.complete(system, user)
+            except LLMError as exc:
+                last_error = exc
+                raise
+    # Unreachable — Retrying either returns above or reraises — but keeps mypy
+    # happy about the function always returning str or raising.
+    assert last_error is not None
+    raise last_error
+
+
+def _is_in_scope(query: str, llm: LLMClient, settings: Settings) -> bool:
     """Cheap topic/scope check (CLAUDE.md §6B input guardrail). Not perfectly
     reliable (see ask.py's own documented Tier-3-pattern caveats for the same
     class of heuristic) — false negatives here are caught later by the refuse
@@ -172,18 +201,18 @@ def _is_in_scope(query: str, llm: LLMClient) -> bool:
     cost-saving early exit, not the only line of defense against off-topic
     queries reaching generation.
     """
-    response = llm.complete(_SCOPE_CHECK_SYSTEM, query).strip().upper()
+    response = _call_llm_with_retry(_SCOPE_CHECK_SYSTEM, query, llm, settings).strip().upper()
     return response.startswith("YES")
 
 
-def _is_multi_part(query: str, llm: LLMClient) -> bool:
+def _is_multi_part(query: str, llm: LLMClient, settings: Settings) -> bool:
     """Cheap single-vs-multi classification. Two or more distinct claim numbers
     named explicitly is a fast, free signal independent of the LLM call; only
     fall back to asking the model when that signal is absent or ambiguous.
     """
     if len(extract_claim_ids(query)) >= 2:
         return True
-    response = llm.complete(_MULTI_PART_SYSTEM, query).strip().upper()
+    response = _call_llm_with_retry(_MULTI_PART_SYSTEM, query, llm, settings).strip().upper()
     return response.startswith("MULTI")
 
 
@@ -196,9 +225,9 @@ def classify_route(
     """The routing decision. See module docstring for the design this implements."""
     if _is_cross_entitlement(query, principal, settings):
         return "refuse"
-    if not _is_in_scope(query, llm):
+    if not _is_in_scope(query, llm, settings):
         return "refuse"
-    if _is_multi_part(query, llm):
+    if _is_multi_part(query, llm, settings):
         return "multi"
     return "single"
 
@@ -217,13 +246,20 @@ def manufacture_refusal_audit(query: str, principal: Principal) -> None:
 
 
 def decompose_query(query: str, settings: Settings, llm: LLMClient) -> list[str]:
-    """Split a multi-part query into claim-scoped sub-queries, capped at
-    settings.agent_max_sub_queries. Falls back to [query] unchanged if the LLM
-    returns nothing usable — a decompose failure must not lose the query entirely.
+    """Split a multi-part query into claim-scoped sub-queries.
+
+    Falls back to [query] unchanged if the LLM returns nothing usable — a
+    decompose failure must not lose the query entirely.
+
+    Deliberately does NOT cap the result at settings.agent_max_sub_queries here
+    (spec-5b — a silent cap would truncate a legitimate answer's coverage without
+    telling anyone). The caller (graph.py's multi_node) checks the length against
+    the budget and escalates if it's exceeded — a visible, distinct outcome
+    instead of a silent, undersized answer.
     """
-    raw = llm.complete(_DECOMPOSE_SYSTEM, query)
+    raw = _call_llm_with_retry(_DECOMPOSE_SYSTEM, query, llm, settings)
     sub_queries = [line.strip() for line in raw.splitlines() if line.strip()]
     if not sub_queries:
         log.warning("decompose_query: LLM returned no usable sub-queries, falling back to original")
         return [query]
-    return sub_queries[: settings.agent_max_sub_queries]
+    return sub_queries

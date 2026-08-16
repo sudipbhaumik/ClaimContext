@@ -29,6 +29,9 @@ class RetrievalResult(BaseModel):
     text: str
     embedding_model: str  # from payload — used by staleness guard
     chunker_version: str  # from payload
+    effective_date: str | None = None  # policy coverage start (spec-5b temporal tool)
+    expiry_date: str | None = None  # policy coverage end (spec-5b temporal tool)
+    loss_date: str | None = None  # date of loss, claim-scoped artifacts (spec-5b temporal tool)
 
 
 class AskResult(BaseModel):

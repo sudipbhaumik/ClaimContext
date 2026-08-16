@@ -46,6 +46,19 @@ class Settings(BaseSettings):
     # faster) model to be configured without touching business logic (§2A.2).
     agent_model: str = Field(default="llama3.2")
 
+    # ── Agent hardening (spec-5b) ────────────────────────────────────────────────
+    # Distinct from llm_timeout_seconds (ask()'s answer-generation call) — governs
+    # the agent's OWN LLM calls (scope check, multi-part check, decompose).
+    agent_llm_timeout_seconds: int = Field(default=15)
+    # Per-tool-call timeout (metadata-filter's Qdrant query, etc.).
+    agent_tool_timeout_seconds: int = Field(default=10)
+    # Per-query ceiling on total tool/LLM calls the graph may make — a budget
+    # guard against a pathological decomposition or a future tool-calling loop.
+    agent_max_tool_calls: int = Field(default=10)
+    # tenacity retry count on agent-internal external calls (router LLM calls,
+    # tool calls) before escalating.
+    agent_retry_attempts: int = Field(default=2)
+
     # ── Embedding ─────────────────────────────────────────────────────────────
     embedding_model: str = Field(default="BAAI/bge-large-en-v1.5")
     chunker_version: str = Field(default="v1")

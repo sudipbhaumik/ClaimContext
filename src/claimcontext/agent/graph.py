@@ -27,12 +27,15 @@ from typing import Literal
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
+from qdrant_client.http.exceptions import ResponseHandlingException, UnexpectedResponse
+from tenacity import Retrying, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from claimcontext.agent.routing import classify_route, decompose_query, manufacture_refusal_audit
 from claimcontext.agent.state import AgentState
 from claimcontext.auth.models import Principal
 from claimcontext.config import Settings
 from claimcontext.retrieval.ask import _PROMPT_VERSION, _REFUSE_MESSAGE, ask
+from claimcontext.retrieval.errors import LLMError
 from claimcontext.retrieval.hybrid_retriever import HybridRetriever
 from claimcontext.retrieval.llm_client import LLMClient
 from claimcontext.retrieval.models import AskResult
@@ -40,6 +43,36 @@ from claimcontext.retrieval.reranker import Reranker
 from claimcontext.retrieval.retriever import Retriever
 
 log = logging.getLogger(__name__)
+
+# Retryable/escalatable failures ONLY — transient LLM and Qdrant-connection
+# problems. Deliberately NOT bare Exception (spec-5b known gap #3, promoted to
+# fixed): a blanket except swallows genuine bugs (AttributeError, TypeError,
+# KeyError from a real defect inside ask()) into a graceful "escalation" message,
+# which quietly defeats exactly the kind of regression-discovery discipline this
+# project's eval harness was built to enforce elsewhere (spec-4). A real bug
+# should crash loudly in tests/eval, not disappear into a polite refusal.
+# ConfigurationError/IndexStalenessError are deliberately excluded — retrying a
+# missing API key or a stale index doesn't help; those are setup bugs, not
+# transient failures, and should surface immediately, not after 2 retries.
+_RETRYABLE_EXCEPTIONS = (
+    LLMError,
+    ResponseHandlingException,
+    UnexpectedResponse,
+    ConnectionError,
+    TimeoutError,
+)
+
+# Distinct from _REFUSE_MESSAGE (imported from ask.py) — deliberately (spec-5b
+# Decisions): "the system doesn't know" (a normal refusal) and "the system hit an
+# internal operational limit" (escalation) must be distinguishable in the returned
+# data, not silently collapsed into the same outcome. Still non-disclosing about
+# claim existence, same §6B discipline as every other refusal-shaped message.
+_ESCALATE_MESSAGE = (
+    "This request could not be completed due to a system limit (either the "
+    "question required more sub-steps than allowed, or an internal service call "
+    "failed repeatedly). Please rephrase your question more narrowly, or escalate "
+    "to a supervisor if this persists."
+)
 
 
 def _agent_llm_client(settings: Settings) -> LLMClient:
@@ -67,6 +100,57 @@ def build_agent_graph(
     """
     agent_llm = _agent_llm_client(settings)
 
+    def _escalate(state: AgentState, reason: str) -> AskResult:
+        log.warning(
+            "agent: escalating query_hash=%s reason=%s",
+            state.query[:60],
+            reason,
+        )
+        return AskResult(
+            query=state.query,
+            answer=_ESCALATE_MESSAGE,
+            citations=[],
+            retrieved_chunks=[],
+            llm_model=settings.llm_model,
+            prompt_version=_PROMPT_VERSION,
+            refused=True,
+            adjuster_id=state.principal.adjuster_id,
+        )
+
+    def _ask_with_retry(query: str, principal: Principal) -> AskResult:
+        """Retry a single ask() call on a TRANSIENT failure only
+        (_RETRYABLE_EXCEPTIONS), bounded by settings.agent_retry_attempts
+        (spec-5b hardening). ask() itself already has per-provider timeout/
+        fallback behavior (spec-2a/2c); this is an additional layer at the
+        agent's own call site, catching failures ask() doesn't itself retry
+        (e.g. a transient Qdrant connection error). A non-transient exception
+        (a real bug) is NOT caught here — it propagates immediately, on the
+        first attempt, so it surfaces as a loud failure in tests/eval rather
+        than a graceful escalation.
+        """
+        last_error: Exception | None = None
+        for attempt in Retrying(
+            stop=stop_after_attempt(settings.agent_retry_attempts),
+            wait=wait_exponential(multiplier=1, min=1, max=4),
+            retry=retry_if_exception_type(_RETRYABLE_EXCEPTIONS),
+            reraise=True,
+        ):
+            with attempt:
+                try:
+                    return ask(
+                        query=query,
+                        retriever=retriever,
+                        llm=llm,
+                        settings=settings,
+                        reranker=reranker,
+                        principal=principal,
+                    )
+                except _RETRYABLE_EXCEPTIONS as exc:
+                    last_error = exc
+                    raise
+        assert last_error is not None
+        raise last_error
+
     def router_node(state: AgentState) -> dict:
         route = classify_route(state.query, state.principal, agent_llm, settings)
         log.info(
@@ -81,28 +165,40 @@ def build_agent_graph(
         return state.route
 
     def single_node(state: AgentState) -> dict:
-        result = ask(
-            query=state.query,
-            retriever=retriever,
-            llm=llm,
-            settings=settings,
-            reranker=reranker,
-            principal=state.principal,
-        )
+        try:
+            result = _ask_with_retry(state.query, state.principal)
+        except _RETRYABLE_EXCEPTIONS:
+            log.exception("agent: single_node ask() failed after retries")
+            return {"ask_results": [_escalate(state, "tool_failure")]}
         return {"ask_results": [result]}
 
     def multi_node(state: AgentState) -> dict:
         sub_queries = decompose_query(state.query, settings, agent_llm)
+
+        # Budget check (spec-5b Proof 4a): decompose_query no longer silently
+        # caps its output — a query needing more sub-steps than allowed must
+        # escalate visibly, not get silently truncated into an undersized answer.
+        if len(sub_queries) > settings.agent_max_sub_queries:
+            log.warning(
+                "agent: decompose produced %d sub-queries, exceeding agent_max_sub_queries=%d",
+                len(sub_queries),
+                settings.agent_max_sub_queries,
+            )
+            return {
+                "sub_queries": sub_queries,
+                "ask_results": [_escalate(state, "budget_exceeded")],
+            }
+
         results: list[AskResult] = []
         for sub_query in sub_queries:
-            result = ask(
-                query=sub_query,
-                retriever=retriever,
-                llm=llm,
-                settings=settings,
-                reranker=reranker,
-                principal=state.principal,
-            )
+            try:
+                result = _ask_with_retry(sub_query, state.principal)
+            except _RETRYABLE_EXCEPTIONS:
+                log.exception(
+                    "agent: multi_node ask() failed after retries for sub_query=%r", sub_query
+                )
+                results.append(_escalate(state, "tool_failure"))
+                continue
             results.append(result)
         return {"sub_queries": sub_queries, "ask_results": results}
 
