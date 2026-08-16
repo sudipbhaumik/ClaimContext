@@ -25,6 +25,24 @@ ask.py's exact `_REFUSE_MESSAGE`, `_query_hash()`, and `_audit()` — imported, 
 duplicated — so the response and audit-log shape are byte-identical to what
 `ask()` would have produced for the same case (§6B: no new distinguishable
 refusal path introduced at this layer).
+
+spec-6 finding, fixed here: `_claim_owner()`'s Qdrant lookup was an UNHARDENED
+external call spec-5b's hardening pass missed. spec-5b's model was "harden the
+calls inside single_node/multi_node" — but the router runs BEFORE those, and
+`_is_cross_entitlement()` makes its own direct Qdrant call to resolve a claim's
+owner, independent of the `retriever` argument passed into the graph. Every
+prior hardening proof (spec-5b's own, plus spec-6's spec/execution proofs)
+mocked failures downstream of this call, so it was never exercised against a
+real failure — spec-6's environmental proof (a genuinely unreachable Qdrant
+address, not a mocked exception) is what caught it: an uncaught
+ResponseHandlingException crashed the whole graph invocation before reaching
+any hardened code path. Fixed below with the same specific-exception discipline
+as `_ask_with_retry`/`_call_llm_with_retry` — NOT a blanket `except Exception`.
+That distinction matters more here than anywhere else in the codebase: this is
+entitlement resolution. A blanket catch would silently turn a genuine bug in
+security-relevant code into a graceful "escalation," which is the last place a
+silent failure belongs. Retry/escalate on transient connection failures only;
+a real logic error in entitlement resolution must propagate loudly.
 """
 
 from __future__ import annotations
@@ -34,6 +52,7 @@ import re
 from typing import Literal
 
 from qdrant_client import QdrantClient
+from qdrant_client.http.exceptions import ResponseHandlingException, UnexpectedResponse
 from qdrant_client.models import FieldCondition, Filter, MatchValue
 from tenacity import Retrying, retry_if_exception_type, stop_after_attempt, wait_exponential
 
@@ -47,6 +66,18 @@ from claimcontext.retrieval.errors import LLMError
 from claimcontext.retrieval.llm_client import LLMClient
 
 log = logging.getLogger(__name__)
+
+# Qdrant-specific transient-failure types — shared with graph.py's
+# _RETRYABLE_EXCEPTIONS (graph.py imports this constant rather than duplicating
+# it; routing.py has no dependency on graph.py, so this direction avoids a
+# circular import). Deliberately narrow: connection/timeout-shaped failures
+# only, never a bare Exception — see module docstring above.
+QDRANT_RETRYABLE_EXCEPTIONS = (
+    ResponseHandlingException,
+    UnexpectedResponse,
+    ConnectionError,
+    TimeoutError,
+)
 
 _CLAIM_ID_PATTERN = re.compile(r"\bCLM-\d{4}\b", re.IGNORECASE)
 
@@ -101,19 +132,49 @@ def _claim_owner(claim_id: str, settings: Settings) -> tuple[str, str] | None:
     """Look up (region, assigned_adjuster) for a claim number via a single cheap
     Qdrant scroll (limit=1, no vector search, no reranking) — not a full retrieval.
 
-    Returns None if the claim number doesn't exist in the corpus at all (not a
-    security-relevant case; just means the pre-filter can't say anything, and the
-    query proceeds to ask() as normal).
+    Returns None if: the claim number doesn't exist in the corpus at all (not a
+    security-relevant case), OR a transient Qdrant failure persists past retry —
+    both cases degrade to the pre-filter's existing "advisory, not authoritative"
+    contract (spec-5a): a None here just means the router has no opinion, and the
+    query proceeds to ask() as normal. If Qdrant is genuinely down, ask()'s own
+    retriever.search() call hits the same outage next and escalates correctly
+    through the already-hardened _ask_with_retry path — this function doesn't
+    need its own escalation machinery, it only needs to not crash the router.
+
+    A non-transient exception (a real bug, not a connection/timeout problem) is
+    NOT caught here — it propagates immediately. See module docstring: this is
+    entitlement resolution, and a silent catch-all here would be a security bug.
     """
-    client = QdrantClient(url=settings.qdrant_url)
-    results, _ = client.scroll(
-        collection_name=settings.qdrant_collection,
-        scroll_filter=Filter(
-            must=[FieldCondition(key="claim_number", match=MatchValue(value=claim_id))]
-        ),
-        with_payload=["region", "assigned_adjuster"],
-        limit=1,
-    )
+    try:
+        for attempt in Retrying(
+            stop=stop_after_attempt(settings.agent_retry_attempts),
+            wait=wait_exponential(multiplier=1, min=1, max=4),
+            retry=retry_if_exception_type(QDRANT_RETRYABLE_EXCEPTIONS),
+            reraise=True,
+        ):
+            with attempt:
+                client = QdrantClient(url=settings.qdrant_url)
+                results, _ = client.scroll(
+                    collection_name=settings.qdrant_collection,
+                    scroll_filter=Filter(
+                        must=[FieldCondition(key="claim_number", match=MatchValue(value=claim_id))]
+                    ),
+                    with_payload=["region", "assigned_adjuster"],
+                    limit=1,
+                )
+    except QDRANT_RETRYABLE_EXCEPTIONS:
+        # reraise=True inside Retrying means the last attempt's exception
+        # propagates OUT of the for-loop once retries are exhausted — caught
+        # here, at the outer try, not inside the loop (a catch inside the loop
+        # would just get re-raised by tenacity's own retry machinery anyway).
+        log.warning(
+            "_claim_owner: transient failure persisted past retry for claim=%s — "
+            "treating as unknown (advisory pre-filter degrades gracefully; ask() "
+            "will hit the same failure and escalate properly if it's a real outage)",
+            claim_id,
+        )
+        return None
+
     if not results or not results[0].payload:
         return None
     payload = results[0].payload

@@ -27,10 +27,14 @@ from typing import Literal
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
-from qdrant_client.http.exceptions import ResponseHandlingException, UnexpectedResponse
 from tenacity import Retrying, retry_if_exception_type, stop_after_attempt, wait_exponential
 
-from claimcontext.agent.routing import classify_route, decompose_query, manufacture_refusal_audit
+from claimcontext.agent.routing import (
+    QDRANT_RETRYABLE_EXCEPTIONS,
+    classify_route,
+    decompose_query,
+    manufacture_refusal_audit,
+)
 from claimcontext.agent.state import AgentState
 from claimcontext.auth.models import Principal
 from claimcontext.config import Settings
@@ -54,13 +58,10 @@ log = logging.getLogger(__name__)
 # ConfigurationError/IndexStalenessError are deliberately excluded — retrying a
 # missing API key or a stale index doesn't help; those are setup bugs, not
 # transient failures, and should surface immediately, not after 2 retries.
-_RETRYABLE_EXCEPTIONS = (
-    LLMError,
-    ResponseHandlingException,
-    UnexpectedResponse,
-    ConnectionError,
-    TimeoutError,
-)
+# QDRANT_RETRYABLE_EXCEPTIONS is imported from routing.py, not redefined here —
+# routing.py has no dependency on this module, so importing this direction
+# avoids a circular import while keeping one definition, not two.
+_RETRYABLE_EXCEPTIONS = (LLMError, *QDRANT_RETRYABLE_EXCEPTIONS)
 
 # Distinct from _REFUSE_MESSAGE (imported from ask.py) — deliberately (spec-5b
 # Decisions): "the system doesn't know" (a normal refusal) and "the system hit an
