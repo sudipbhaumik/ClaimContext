@@ -81,6 +81,7 @@ markers = [
     "retrieval: live Qdrant + optional Ollama proofs (spec-2a)",
     "eval: live eval harness proofs — requires Qdrant, Ollama, and OPENAI_API_KEY (spec-4)",
     "agent: live agent orchestrator proofs — requires Qdrant + Ollama (spec-5a)",
+    "agent_eval: live trajectory eval proofs — requires Qdrant + Ollama (spec-6)",
 ]
 
 [dependency-groups]

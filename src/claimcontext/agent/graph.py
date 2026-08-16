@@ -169,7 +169,10 @@ def build_agent_graph(
             result = _ask_with_retry(state.query, state.principal)
         except _RETRYABLE_EXCEPTIONS:
             log.exception("agent: single_node ask() failed after retries")
-            return {"ask_results": [_escalate(state, "tool_failure")]}
+            return {
+                "ask_results": [_escalate(state, "tool_failure")],
+                "escalation_reason": "tool_failure",
+            }
         return {"ask_results": [result]}
 
     def multi_node(state: AgentState) -> dict:
@@ -187,9 +190,11 @@ def build_agent_graph(
             return {
                 "sub_queries": sub_queries,
                 "ask_results": [_escalate(state, "budget_exceeded")],
+                "escalation_reason": "budget_exceeded",
             }
 
         results: list[AskResult] = []
+        escalation_reason: str | None = None
         for sub_query in sub_queries:
             try:
                 result = _ask_with_retry(sub_query, state.principal)
@@ -198,9 +203,14 @@ def build_agent_graph(
                     "agent: multi_node ask() failed after retries for sub_query=%r", sub_query
                 )
                 results.append(_escalate(state, "tool_failure"))
+                escalation_reason = "tool_failure"
                 continue
             results.append(result)
-        return {"sub_queries": sub_queries, "ask_results": results}
+        return {
+            "sub_queries": sub_queries,
+            "ask_results": results,
+            "escalation_reason": escalation_reason,
+        }
 
     def refuse_node(state: AgentState) -> dict:
         manufacture_refusal_audit(state.query, state.principal)

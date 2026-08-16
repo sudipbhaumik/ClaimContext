@@ -59,6 +59,14 @@ class Settings(BaseSettings):
     # tool calls) before escalating.
     agent_retry_attempts: int = Field(default=2)
 
+    # ── Agent eval (spec-6) ──────────────────────────────────────────────────────
+    # Same naming convention as eval_golden_set_path (spec-4) — a distinct golden
+    # set scoring the agent's PATH, not answer content.
+    agent_eval_golden_set_path: str = Field(
+        default="data/agent_eval/trajectory_golden_set_v1.jsonl"
+    )
+    agent_eval_golden_set_version: str = Field(default="v1")
+
     # ── Embedding ─────────────────────────────────────────────────────────────
     embedding_model: str = Field(default="BAAI/bge-large-en-v1.5")
     chunker_version: str = Field(default="v1")

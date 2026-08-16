@@ -45,3 +45,9 @@ class AgentState(BaseModel):
     # exactly one AskResult and no composition to do). This is what run_agent()
     # returns.
     final_answer: AskResult | None = None
+
+    # Set by single_node/multi_node when hardening escalates (spec-5b) —
+    # "budget_exceeded" | "tool_failure" | None. Additive field (spec-6): lets
+    # run_agent_with_trajectory() read the escalation reason directly off state
+    # instead of parsing _ESCALATE_MESSAGE text. None on every non-escalated path.
+    escalation_reason: str | None = None
