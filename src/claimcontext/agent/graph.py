@@ -38,6 +38,7 @@ from claimcontext.agent.routing import (
 from claimcontext.agent.state import AgentState
 from claimcontext.auth.models import Principal
 from claimcontext.config import Settings
+from claimcontext.observability.tracing import get_tracer
 from claimcontext.retrieval.ask import _PROMPT_VERSION, _REFUSE_MESSAGE, ask
 from claimcontext.retrieval.errors import LLMError
 from claimcontext.retrieval.hybrid_retriever import HybridRetriever
@@ -107,6 +108,12 @@ def build_agent_graph(
             state.query[:60],
             reason,
         )
+        tracer = get_tracer()
+        with tracer.span(
+            "agent.escalation", as_type="span", metadata={"escalation_reason": reason}
+        ) as obs:
+            if obs is not None:
+                obs.update(level="WARNING", status_message=f"escalated: {reason}")
         return AskResult(
             query=state.query,
             answer=_ESCALATE_MESSAGE,
@@ -153,12 +160,16 @@ def build_agent_graph(
         raise last_error
 
     def router_node(state: AgentState) -> dict:
-        route = classify_route(state.query, state.principal, agent_llm, settings)
-        log.info(
-            "agent: router query_hash=%s route=%s",
-            state.query[:60],
-            route,
-        )
+        tracer = get_tracer()
+        with tracer.span("agent.router", as_type="span", input={"query": state.query}) as obs:
+            route = classify_route(state.query, state.principal, agent_llm, settings)
+            log.info(
+                "agent: router query_hash=%s route=%s",
+                state.query[:60],
+                route,
+            )
+            if obs is not None:
+                obs.update(output={"route": route})
         return {"route": route}
 
     def route_selector(state: AgentState) -> Literal["single", "multi", "refuse"]:
@@ -313,10 +324,30 @@ def run_agent(
     Same return type ask() returns — the agent is a drop-in router in front of
     the same output contract; nothing downstream needs to know whether an answer
     came from bare ask() or through the graph.
+
+    Wrapped in one root span (spec-7b) so router/single/multi/ask()/retrieval/
+    rerank/LLM spans triggered during compiled.invoke() all nest under a single
+    trace — this is the trace root for both the HTTP /ask path and any future
+    CLI agent path, without either needing its own instrumentation code.
     """
-    compiled = build_agent_graph(settings, retriever, llm, reranker)
-    initial_state = AgentState(query=query, principal=principal)
-    result_state = compiled.invoke(initial_state)
-    final_answer = result_state["final_answer"]
-    assert isinstance(final_answer, AskResult)
-    return final_answer
+    tracer = get_tracer()
+    with tracer.span(
+        "agent.run_agent",
+        as_type="agent",
+        input={"query": query, "adjuster_id": principal.adjuster_id},
+    ) as obs:
+        compiled = build_agent_graph(settings, retriever, llm, reranker)
+        initial_state = AgentState(query=query, principal=principal)
+        result_state = compiled.invoke(initial_state)
+        final_answer = result_state["final_answer"]
+        assert isinstance(final_answer, AskResult)
+        if obs is not None:
+            obs.update(
+                output=final_answer.answer,
+                metadata={
+                    "route": result_state.get("route"),
+                    "refused": final_answer.refused,
+                    "escalation_reason": result_state.get("escalation_reason"),
+                },
+            )
+        return final_answer

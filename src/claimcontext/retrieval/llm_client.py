@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 
 from claimcontext.config import Settings
+from claimcontext.observability.tracing import get_tracer
 from claimcontext.retrieval.errors import ConfigurationError, LLMError
 
 log = logging.getLogger(__name__)
@@ -49,17 +50,32 @@ class LLMClient:
         Timeout is settings.llm_timeout_seconds.
         """
         provider = self._settings.llm_provider
-        try:
-            if provider == "ollama":
-                return self._complete_ollama(system, user)
-            elif provider == "anthropic":
-                return self._complete_anthropic(system, user)
-            else:
-                return self._complete_openai(system, user)
-        except LLMError:
-            raise
-        except Exception as exc:
-            raise LLMError(f"[{provider}] unexpected error: {exc}") from exc
+        tracer = get_tracer()
+        with tracer.span(
+            "llm.complete",
+            as_type="generation",
+            input={"system": system, "user": user},
+            model=self._settings.llm_model,
+            metadata={"provider": provider},
+        ) as obs:
+            try:
+                if provider == "ollama":
+                    result = self._complete_ollama(system, user)
+                elif provider == "anthropic":
+                    result = self._complete_anthropic(system, user)
+                else:
+                    result = self._complete_openai(system, user)
+            except LLMError as exc:
+                if obs is not None:
+                    obs.update(level="ERROR", status_message=str(exc))
+                raise
+            except Exception as exc:
+                if obs is not None:
+                    obs.update(level="ERROR", status_message=str(exc))
+                raise LLMError(f"[{provider}] unexpected error: {exc}") from exc
+            if obs is not None:
+                obs.update(output=result)
+            return result
 
     def _complete_ollama(self, system: str, user: str) -> str:
         import ollama

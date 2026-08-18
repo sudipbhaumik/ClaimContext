@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 
 from claimcontext.config import Settings
+from claimcontext.observability.tracing import get_tracer
 from claimcontext.retrieval.models import RetrievalResult
 from claimcontext.retrieval.retriever import Retriever
 from claimcontext.retrieval.rrf import rrf
@@ -53,23 +54,32 @@ class HybridRetriever:
         """
         k = top_k if top_k is not None else self._settings.top_k
         fetch_k = min(k * 3, max(self._sparse.corpus_size, 1))
+        tracer = get_tracer()
 
-        dense_results = self._dense.search(query, top_k=fetch_k, query_filter=query_filter)
-        sparse_results = self._sparse.search(query, top_n=fetch_k, allowed_ids=allowed_ids)
+        with tracer.span(
+            "retrieval.hybrid_search",
+            as_type="retriever",
+            input={"query": query, "top_k": k},
+        ) as obs:
+            dense_results = self._dense.search(query, top_k=fetch_k, query_filter=query_filter)
+            sparse_results = self._sparse.search(query, top_n=fetch_k, allowed_ids=allowed_ids)
 
-        sparse_ids = [r.chunk_id for r in sparse_results]
+            sparse_ids = [r.chunk_id for r in sparse_results]
 
-        fused = rrf(
-            dense=dense_results,
-            sparse_chunk_ids=sparse_ids,
-            k=self._settings.rrf_k,
-            payload_cache=self._sparse.payload_cache,
-        )
+            fused = rrf(
+                dense=dense_results,
+                sparse_chunk_ids=sparse_ids,
+                k=self._settings.rrf_k,
+                payload_cache=self._sparse.payload_cache,
+            )
 
-        log.info(
-            "hybrid search query=%r → fused %d → returning top %d",
-            query[:60],
-            len(fused),
-            k,
-        )
-        return fused[:k]
+            log.info(
+                "hybrid search query=%r → fused %d → returning top %d",
+                query[:60],
+                len(fused),
+                k,
+            )
+            result = fused[:k]
+            if obs is not None:
+                obs.update(output={"fused_count": len(fused), "returned_count": len(result)})
+            return result

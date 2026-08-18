@@ -13,6 +13,7 @@ import logging
 
 from claimcontext.config import Settings
 from claimcontext.ingestion.embedder import Embedder
+from claimcontext.observability.tracing import get_tracer
 from claimcontext.retrieval.errors import IndexStalenessError
 from claimcontext.retrieval.models import RetrievalResult
 
@@ -86,45 +87,56 @@ class Retriever:
         is not used — dense-side entitlement is handled by query_filter at the store.
         """
         k = top_k if top_k is not None else self._settings.top_k
+        tracer = get_tracer()
 
-        query_vector = self._embedder.embed([query])[0]
+        with tracer.span(
+            "retrieval.dense_search",
+            as_type="retriever",
+            input={"query": query, "top_k": k},
+        ) as obs:
+            query_vector = self._embedder.embed([query])[0]
 
-        # qdrant-client 1.8+ replaced .search() with .query_points()
-        response = self._client.query_points(
-            collection_name=self._settings.qdrant_collection,
-            query=query_vector,
-            limit=k,
-            with_payload=True,
-            query_filter=query_filter,  # type: ignore[arg-type]
-        )
-
-        results: list[RetrievalResult] = []
-        for sp in response.points:
-            p = sp.payload or {}
-            results.append(
-                RetrievalResult(
-                    chunk_id=str(sp.id),
-                    doc_id=p.get("doc_id", ""),
-                    doc_type=p.get("doc_type", ""),
-                    policy_number=p.get("policy_number"),
-                    claim_number=p.get("claim_number"),
-                    page=int(p.get("page", 1)),
-                    section=p.get("section", ""),
-                    score=float(sp.score),
-                    text=p.get("text", ""),
-                    embedding_model=p.get("embedding_model", ""),
-                    chunker_version=p.get("chunker_version", ""),
-                    effective_date=p.get("effective_date"),
-                    expiry_date=p.get("expiry_date"),
-                    loss_date=p.get("loss_date"),
-                )
+            # qdrant-client 1.8+ replaced .search() with .query_points()
+            response = self._client.query_points(
+                collection_name=self._settings.qdrant_collection,
+                query=query_vector,
+                limit=k,
+                with_payload=True,
+                query_filter=query_filter,  # type: ignore[arg-type]
             )
 
-        log.debug(
-            "search query=%r top_k=%d → %d results (top score=%.4f)",
-            query[:60],
-            k,
-            len(results),
-            results[0].score if results else 0.0,
-        )
-        return results
+            results: list[RetrievalResult] = []
+            for sp in response.points:
+                p = sp.payload or {}
+                results.append(
+                    RetrievalResult(
+                        chunk_id=str(sp.id),
+                        doc_id=p.get("doc_id", ""),
+                        doc_type=p.get("doc_type", ""),
+                        policy_number=p.get("policy_number"),
+                        claim_number=p.get("claim_number"),
+                        page=int(p.get("page", 1)),
+                        section=p.get("section", ""),
+                        score=float(sp.score),
+                        text=p.get("text", ""),
+                        embedding_model=p.get("embedding_model", ""),
+                        chunker_version=p.get("chunker_version", ""),
+                        effective_date=p.get("effective_date"),
+                        expiry_date=p.get("expiry_date"),
+                        loss_date=p.get("loss_date"),
+                    )
+                )
+
+            log.debug(
+                "search query=%r top_k=%d → %d results (top score=%.4f)",
+                query[:60],
+                k,
+                len(results),
+                results[0].score if results else 0.0,
+            )
+            if obs is not None:
+                obs.update(
+                    output={"result_count": len(results)},
+                    metadata={"top_score": results[0].score if results else 0.0},
+                )
+            return results

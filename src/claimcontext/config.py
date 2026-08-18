@@ -117,6 +117,21 @@ class Settings(BaseSettings):
     api_host: str = Field(default="0.0.0.0")
     api_port: int = Field(default=8000)
 
+    # ── Observability (spec-7b) ──────────────────────────────────────────────
+    # Master switch — tracing is fully optional; absent/False → disabled, not
+    # a crash (same pattern as the LLM provider keys below).
+    langfuse_enabled: bool = Field(default=False)
+    langfuse_public_key: str | None = Field(default=None)
+    langfuse_secret_key: str | None = Field(default=None)
+    # Cloud free tier by default (spec-7b "Decided now #2") — set to
+    # "http://localhost:3000" to point at the self-hosted stack instead
+    # (docker-compose.langfuse.yml, not run by default).
+    langfuse_host: str = Field(default="https://cloud.langfuse.com")
+    # Short timeout on the exporter's HTTP calls — span creation itself is a
+    # local, synchronous, in-process OTEL operation and cannot block on this;
+    # this only bounds the background exporter thread's per-request wait.
+    langfuse_timeout_seconds: int = Field(default=5)
+
     # ── Secrets (optional; absent → feature disabled, not a crash) ────────────
     anthropic_api_key: str | None = Field(default=None)
     openai_api_key: str | None = Field(default=None)

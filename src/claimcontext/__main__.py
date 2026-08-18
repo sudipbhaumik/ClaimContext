@@ -120,6 +120,7 @@ def _run_ask(args: argparse.Namespace) -> int:
         print(json.dumps(output, indent=2))
         return 0
 
+    from claimcontext.observability.tracing import get_tracer
     from claimcontext.retrieval.ask import ask
     from claimcontext.retrieval.llm_client import LLMClient
     from claimcontext.retrieval.reranker import Reranker
@@ -138,6 +139,12 @@ def _run_ask(args: argparse.Namespace) -> int:
     except LLMError as exc:
         log.error("LLM call failed: %s", exc)
         return 1
+    finally:
+        # ask() traces itself (spec-7b, shared boundary — no CLI-specific
+        # instrumentation needed). Flush here since this process is
+        # short-lived and would otherwise exit before the background
+        # exporter's periodic flush interval elapses.
+        get_tracer().shutdown()
 
     print(json.dumps(result.model_dump(), indent=2))
     return 0

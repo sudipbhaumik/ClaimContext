@@ -25,6 +25,7 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
     "httpx>=0.28.1",
+    "langfuse>=4.14.4",
 ]
 
 [project.optional-dependencies]
@@ -86,6 +87,7 @@ markers = [
     "agent: live agent orchestrator proofs — requires Qdrant + Ollama (spec-5a)",
     "agent_eval: live trajectory eval proofs — requires Qdrant + Ollama (spec-6)",
     "api: live FastAPI serving proofs — requires Qdrant + Ollama (spec-7a)",
+    "observability: live Langfuse tracing proofs — requires Qdrant, Ollama, and a reachable Langfuse instance (spec-7b)",
 ]
 
 [dependency-groups]

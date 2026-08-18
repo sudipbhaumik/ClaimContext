@@ -27,6 +27,7 @@ from pathlib import Path
 from claimcontext.auth.entitlement import EntitlementScope, build_entitlement_scope
 from claimcontext.auth.models import Principal
 from claimcontext.config import Settings
+from claimcontext.observability.tracing import get_tracer
 from claimcontext.retrieval.hybrid_retriever import HybridRetriever
 from claimcontext.retrieval.llm_client import LLMClient
 from claimcontext.retrieval.models import AskResult, Citation, RetrievalResult
@@ -182,6 +183,39 @@ def _audit(
 
 
 def ask(
+    query: str,
+    retriever: Retriever | HybridRetriever,
+    llm: LLMClient,
+    settings: Settings,
+    reranker: Reranker | None = None,
+    principal: Principal | None = None,
+) -> AskResult:
+    """Traced entry point — thin wrapper around _ask_impl() (spec-7b).
+
+    One span per ask() call, regardless of caller (CLI's direct ask() path,
+    or the agent's per-sub-query calls in graph.py's _ask_with_retry) — this
+    is the "one ask()-call span per trajectory step" spec-7b Proof 3 checks
+    against spec-6's AgentTrajectory. Wrapping here, once, rather than at
+    every call site, means both entry points get this for free.
+    """
+    tracer = get_tracer()
+    with tracer.span(
+        "ask",
+        as_type="chain",
+        input={"query": query, "adjuster_id": principal.adjuster_id if principal else None},
+    ) as obs:
+        result = _ask_impl(
+            query, retriever, llm, settings, reranker=reranker, principal=principal
+        )
+        if obs is not None:
+            obs.update(
+                output=result.answer,
+                metadata={"refused": result.refused, "citation_count": len(result.citations)},
+            )
+        return result
+
+
+def _ask_impl(
     query: str,
     retriever: Retriever | HybridRetriever,
     llm: LLMClient,

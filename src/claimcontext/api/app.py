@@ -25,6 +25,7 @@ from claimcontext.api.schemas import (
 from claimcontext.auth.errors import AuthorizationError
 from claimcontext.auth.resolver import resolve_principal
 from claimcontext.config import Settings, get_settings
+from claimcontext.observability.tracing import get_tracer
 from claimcontext.retrieval.errors import IndexStalenessError
 from claimcontext.retrieval.hybrid_retriever import HybridRetriever
 from claimcontext.retrieval.llm_client import LLMClient
@@ -84,6 +85,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     log.info("startup: resources constructed once (retriever/llm/reranker)")
     yield
+    # Flush/close the tracing client here — never on the request path
+    # (Tracer.shutdown() is a blocking network operation by design).
+    get_tracer().shutdown()
     log.info("shutdown")
 
 
@@ -150,30 +154,38 @@ async def ask_route(body: AskRequest, request: Request) -> JSONResponse:
         "ask: principal resolved adjuster=%r region=%r", principal.adjuster_id, principal.region
     )
 
-    try:
-        # run_agent()/ask() never call check_index_staleness() themselves —
-        # only /ready and the CLI do. Resources are lifespan-constructed once
-        # at startup (see AppState), so without this explicit check here, a
-        # reindex that happens after startup but before the next /ready poll
-        # would go unnoticed by /ask entirely. This call is what makes the
-        # mid-flight-staleness → 503 decision (spec-7a "Readiness and
-        # staleness semantics") real rather than merely documented.
-        state.retriever.check_index_staleness()
-        result = run_agent(
-            query=body.query,
-            principal=principal,
-            settings=state.settings,
-            retriever=state.retriever,
-            llm=state.llm,
-            reranker=state.reranker,
-        )
-    except IndexStalenessError:
-        # IndexStalenessError is deliberately excluded from the agent's own
-        # retry/escalation handling (graph.py) and always propagates loudly —
-        # here, mid-flight, it maps to a 503, not the generic 500 bucket
-        # (see spec-7a "Readiness and staleness semantics").
-        log.error("ask: index went stale mid-flight")
-        return JSONResponse(status_code=503, content={"detail": _STALE_INDEX_MESSAGE})
+    # This span is the HTTP request's trace root — run_agent()'s own span
+    # nests under it. trace_id must be read WHILE this span is still active;
+    # once the `with` block exits, there is no current span to read it from.
+    tracer = get_tracer()
+    with tracer.span(
+        "http.ask", as_type="span", input={"adjuster_id": principal.adjuster_id}
+    ):
+        trace_id = tracer.current_trace_id()
+        try:
+            # run_agent()/ask() never call check_index_staleness() themselves —
+            # only /ready and the CLI do. Resources are lifespan-constructed once
+            # at startup (see AppState), so without this explicit check here, a
+            # reindex that happens after startup but before the next /ready poll
+            # would go unnoticed by /ask entirely. This call is what makes the
+            # mid-flight-staleness → 503 decision (spec-7a "Readiness and
+            # staleness semantics") real rather than merely documented.
+            state.retriever.check_index_staleness()
+            result = run_agent(
+                query=body.query,
+                principal=principal,
+                settings=state.settings,
+                retriever=state.retriever,
+                llm=state.llm,
+                reranker=state.reranker,
+            )
+        except IndexStalenessError:
+            # IndexStalenessError is deliberately excluded from the agent's own
+            # retry/escalation handling (graph.py) and always propagates loudly —
+            # here, mid-flight, it maps to a 503, not the generic 500 bucket
+            # (see spec-7a "Readiness and staleness semantics").
+            log.error("ask: index went stale mid-flight trace_id=%s", trace_id)
+            return JSONResponse(status_code=503, content={"detail": _STALE_INDEX_MESSAGE})
 
-    log.info("ask: route complete refused=%s", result.refused)
+    log.info("ask: route complete refused=%s trace_id=%s", result.refused, trace_id)
     return JSONResponse(status_code=200, content=to_ask_response(result).model_dump())

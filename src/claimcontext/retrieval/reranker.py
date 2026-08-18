@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 
 from claimcontext.config import Settings
+from claimcontext.observability.tracing import get_tracer
 from claimcontext.retrieval.models import RetrievalResult
 
 log = logging.getLogger(__name__)
@@ -59,22 +60,32 @@ class Reranker:
             return []
 
         self._load()
+        tracer = get_tracer()
 
-        pairs = [
-            (query, f"{r.section} {r.text}".strip() if r.section else r.text) for r in candidates
-        ]
-        scores = self._model.predict(pairs)  # type: ignore[attr-defined]
+        with tracer.span(
+            "retrieval.rerank",
+            as_type="tool",
+            input={"query": query, "candidate_count": len(candidates)},
+            model=self._model_name,
+        ) as obs:
+            pairs = [
+                (query, f"{r.section} {r.text}".strip() if r.section else r.text)
+                for r in candidates
+            ]
+            scores = self._model.predict(pairs)  # type: ignore[attr-defined]
 
-        log.debug(
-            "rerank query=%r candidates=%d top_score=%.4f",
-            query[:60],
-            len(candidates),
-            float(max(scores)),
-        )
+            log.debug(
+                "rerank query=%r candidates=%d top_score=%.4f",
+                query[:60],
+                len(candidates),
+                float(max(scores)),
+            )
 
-        reranked = [
-            r.model_copy(update={"score": float(s)})
-            for r, s in zip(candidates, scores, strict=True)
-        ]
-        reranked.sort(key=lambda r: r.score, reverse=True)
-        return reranked
+            reranked = [
+                r.model_copy(update={"score": float(s)})
+                for r, s in zip(candidates, scores, strict=True)
+            ]
+            reranked.sort(key=lambda r: r.score, reverse=True)
+            if obs is not None:
+                obs.update(output={"top_score": reranked[0].score if reranked else 0.0})
+            return reranked
