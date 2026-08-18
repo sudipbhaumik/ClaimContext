@@ -153,7 +153,16 @@ def _claim_owner(claim_id: str, settings: Settings) -> tuple[str, str] | None:
             reraise=True,
         ):
             with attempt:
-                client = QdrantClient(url=settings.qdrant_url)
+                # timeout is not optional here: without it, a hung connection
+                # never raises anything for tenacity to retry on — the first
+                # attempt just blocks forever, and the retry loop above never
+                # fires (spec-7b finding: a live test hang showed an
+                # unreachable Qdrant can block a connection for 9.5 hours
+                # instead of failing fast; the OS is not a reliable fast-fail
+                # backstop).
+                client = QdrantClient(
+                    url=settings.qdrant_url, timeout=settings.qdrant_timeout_seconds
+                )
                 results, _ = client.scroll(
                     collection_name=settings.qdrant_collection,
                     scroll_filter=Filter(

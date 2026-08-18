@@ -3,6 +3,8 @@
 import os
 from unittest.mock import patch
 
+import pytest
+
 from claimcontext.config import Settings, get_settings
 
 
@@ -15,9 +17,14 @@ def test_settings_loads_with_defaults() -> None:
     assert s.qdrant_collection == "claimcontext"
 
 
-def test_missing_optional_secrets_do_not_crash() -> None:
-    with patch.dict(os.environ, {}, clear=False):
-        s = Settings()
+def test_missing_optional_secrets_do_not_crash(monkeypatch: pytest.MonkeyPatch) -> None:
+    # delenv, not just patch.dict(clear=False) — a real key set in the dev
+    # shell (e.g. OPENAI_API_KEY for other work) must not leak into this
+    # test's assertion, or the test's pass/fail depends on whoever's running
+    # it, not on the code under test.
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    s = Settings(_env_file=None)  # type: ignore[call-arg]
     assert s.anthropic_api_key is None
     assert s.openai_api_key is None
 

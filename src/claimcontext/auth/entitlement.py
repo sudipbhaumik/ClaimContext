@@ -54,13 +54,20 @@ class EntitlementScope:
             ]
         )
 
-    def collect_allowed_ids(self, qdrant_url: str, collection: str) -> frozenset[str]:
+    def collect_allowed_ids(
+        self, qdrant_url: str, collection: str, timeout: int | None = None
+    ) -> frozenset[str]:
         """Scroll Qdrant with the entitlement filter; return entitled chunk_ids.
 
         Used as the allowed_ids argument to BM25Index.search() (sparse-side filter).
-        Authored by human (§3 Python-mastery split).
+        Authored by human (§3 Python-mastery split) — the entitlement logic below
+        is unchanged; `timeout` is a hardening addition (spec-7b finding): every
+        other QdrantClient in this codebase sets an explicit timeout, this one
+        didn't, and a live test hang (an unreachable Qdrant blocking a connection
+        for 9.5 hours instead of failing fast) showed that omission is not
+        theoretical — the OS cannot be trusted to refuse a dead connection quickly.
         """
-        client = QdrantClient(url=qdrant_url)
+        client = QdrantClient(url=qdrant_url, timeout=timeout)
         chunk_ids: list[str] = []
         offset = None
 

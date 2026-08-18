@@ -265,7 +265,9 @@ def _ask_impl(
     if principal is not None:
         scope = build_entitlement_scope(principal)
         query_filter = scope.as_filter()
-        allowed_ids = scope.collect_allowed_ids(settings.qdrant_url, settings.qdrant_collection)
+        allowed_ids = scope.collect_allowed_ids(
+            settings.qdrant_url, settings.qdrant_collection, timeout=settings.qdrant_timeout_seconds
+        )
 
     # ── Step 3: retrieve ──────────────────────────────────────────────────────
     # Fetch rrf_fetch_k candidates when reranking, otherwise top_k.
