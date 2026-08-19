@@ -11,9 +11,10 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from claimcontext.agent.graph import run_agent
 from claimcontext.api.schemas import (
@@ -49,6 +50,10 @@ log = logging.getLogger(__name__)
 _STALE_INDEX_MESSAGE = "Service temporarily unavailable. Please try again shortly."
 
 _GENERIC_ERROR_MESSAGE = "An unexpected error occurred."
+
+# UI — a single self-contained static file, no build step.
+_STATIC_DIR = Path(__file__).parent / "static"
+_INDEX_HTML = _STATIC_DIR / "index.html"
 
 
 @dataclass
@@ -109,6 +114,14 @@ def _refusal_response() -> JSONResponse:
     every other refusal reason even with identical body text."""
     body = AskResponse(answer=PUBLIC_REFUSAL_MESSAGE, citations=[], refused=True)
     return JSONResponse(status_code=200, content=body.model_dump())
+
+
+@app.get("/", include_in_schema=False)
+async def index() -> FileResponse:
+    """Serves UI — same-origin, no CORS needed. Deliberately
+    not traced (consistent with /health and /ready): a static-file request
+    is not an analytically interesting event the way /ask is."""
+    return FileResponse(_INDEX_HTML)
 
 
 @app.get("/health")

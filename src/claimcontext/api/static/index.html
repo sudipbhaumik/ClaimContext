@@ -1,0 +1,529 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ClaimContext</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" media="print" onload="this.media='all'">
+<style>
+  :root {
+    --bg: #F1F3F1;
+    --ink: #1C2B33;
+    --ink-soft: #4B5A61;
+    --line: #C7CCC5;
+    --line-soft: #DEE1DC;
+    --accent: #1B6F6A;
+    --accent-ink: #ffffff;
+    --brass: #B08B2E;
+    --brass-bg: #FBF4E3;
+    --error: #A6402F;
+    --error-bg: #F7E9E6;
+    --surface: #FFFFFF;
+    --font-body: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --radius: 6px;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font-body);
+    height: 100%;
+  }
+
+  body {
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+  }
+
+  a { color: var(--accent); }
+
+  /* ── Top bar ─────────────────────────────────────────────────────────── */
+  header {
+    border-bottom: 1px solid var(--line);
+    background: var(--surface);
+    padding: 14px 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+
+  .brand {
+    font-weight: 700;
+    font-size: 1.05rem;
+    letter-spacing: 0.01em;
+  }
+
+  .brand small {
+    display: block;
+    font-weight: 400;
+    font-size: 0.72rem;
+    color: var(--ink-soft);
+    letter-spacing: 0.02em;
+    margin-top: 2px;
+  }
+
+  .adjuster-select {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.85rem;
+    color: var(--ink-soft);
+  }
+
+  .segmented {
+    display: inline-flex;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    overflow: hidden;
+    background: var(--surface);
+  }
+
+  .segmented button {
+    appearance: none;
+    border: none;
+    background: transparent;
+    color: var(--ink);
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    font-weight: 500;
+    padding: 7px 12px;
+    cursor: pointer;
+    border-right: 1px solid var(--line);
+  }
+
+  .segmented button:last-child { border-right: none; }
+
+  .segmented button:hover { background: var(--line-soft); }
+
+  .segmented button[aria-pressed="true"] {
+    background: var(--accent);
+    color: var(--accent-ink);
+  }
+
+  .segmented button:focus-visible,
+  button:focus-visible,
+  input:focus-visible,
+  .citation-tab:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  /* ── Conversation area ───────────────────────────────────────────────── */
+  main {
+    flex: 1;
+    width: 100%;
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 24px 20px 140px;
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+  }
+
+  .empty-state {
+    margin-top: 15vh;
+    text-align: center;
+    color: var(--ink-soft);
+  }
+
+  .empty-state h1 {
+    font-size: 1.3rem;
+    color: var(--ink);
+    margin: 0 0 8px;
+  }
+
+  .empty-state p {
+    font-size: 0.95rem;
+    max-width: 46ch;
+    margin: 0 auto;
+    line-height: 1.5;
+  }
+
+  .exchange {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .question {
+    align-self: flex-end;
+    max-width: 85%;
+    background: var(--ink);
+    color: var(--bg);
+    padding: 10px 14px;
+    border-radius: var(--radius);
+    font-size: 0.95rem;
+    line-height: 1.45;
+  }
+
+  .question .meta {
+    display: block;
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    opacity: 0.7;
+    margin-top: 4px;
+  }
+
+  .answer-card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 16px 18px;
+  }
+
+  .answer-text {
+    white-space: pre-wrap;
+    line-height: 1.55;
+    font-size: 0.97rem;
+  }
+
+  .answer-card.refused .answer-text {
+    color: var(--ink);
+  }
+
+  .answer-card.pending {
+    color: var(--ink-soft);
+    font-style: normal;
+  }
+
+  .pending-dots::after {
+    content: "";
+    display: inline-block;
+    animation: dots 1.2s steps(4, end) infinite;
+  }
+
+  @keyframes dots {
+    0% { content: ""; }
+    25% { content: "."; }
+    50% { content: ".."; }
+    75% { content: "..."; }
+    100% { content: ""; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .pending-dots::after { animation: none; content: "…"; }
+  }
+
+  .error-card {
+    background: var(--error-bg);
+    border: 1px solid var(--error);
+    border-radius: var(--radius);
+    padding: 14px 18px;
+    color: var(--error);
+    font-size: 0.92rem;
+  }
+
+  /* ── Citations: the signature element ───────────────────────────────── */
+  .citations {
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px solid var(--line-soft);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .citations-label {
+    width: 100%;
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--ink-soft);
+    margin-bottom: 2px;
+  }
+
+  .citation-tab {
+    background: var(--brass-bg);
+    border: 1px solid var(--brass);
+    border-left: 4px solid var(--brass);
+    border-radius: 4px;
+    padding: 8px 12px;
+    cursor: pointer;
+    text-align: left;
+    font-family: inherit;
+    max-width: 260px;
+    transition: background 0.15s ease;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .citation-tab { transition: none; }
+  }
+
+  .citation-tab:hover { background: #F5EBD0; }
+
+  .citation-doc {
+    font-family: var(--font-mono);
+    font-weight: 600;
+    font-size: 0.8rem;
+    color: var(--ink);
+  }
+
+  .citation-loc {
+    font-size: 0.72rem;
+    color: var(--ink-soft);
+    margin-top: 2px;
+  }
+
+  .citation-excerpt {
+    margin-top: 8px;
+    font-size: 0.78rem;
+    color: var(--ink-soft);
+    line-height: 1.4;
+    border-top: 1px dashed var(--brass);
+    padding-top: 8px;
+    white-space: pre-wrap;
+  }
+
+  .citation-excerpt[hidden] { display: none; }
+
+  /* ── Composer ────────────────────────────────────────────────────────── */
+  .composer {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: var(--surface);
+    border-top: 1px solid var(--line);
+    padding: 14px 20px;
+  }
+
+  .composer form {
+    max-width: 760px;
+    margin: 0 auto;
+    display: flex;
+    gap: 10px;
+  }
+
+  .composer input[type="text"] {
+    flex: 1;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 11px 14px;
+    font-size: 0.95rem;
+    font-family: inherit;
+    color: var(--ink);
+    background: var(--bg);
+  }
+
+  .composer input[type="text"]:focus {
+    background: var(--surface);
+  }
+
+  .composer button {
+    appearance: none;
+    border: none;
+    background: var(--accent);
+    color: var(--accent-ink);
+    border-radius: var(--radius);
+    padding: 11px 20px;
+    font-size: 0.9rem;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+  }
+
+  .composer button:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+
+  .composer button:hover:not(:disabled) { background: #175E5A; }
+
+  .hint {
+    max-width: 760px;
+    margin: 6px auto 0;
+    font-size: 0.7rem;
+    color: var(--ink-soft);
+  }
+
+  @media (max-width: 480px) {
+    main { padding: 16px 14px 150px; }
+    header { padding: 12px 14px; }
+    .question { max-width: 92%; }
+    .citation-tab { max-width: 100%; flex: 1 1 100%; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    ClaimContext
+    <small>Grounded, cited answers from your claims documents</small>
+  </div>
+  <div class="adjuster-select">
+    <span id="adjuster-label">Acting as</span>
+    <div class="segmented" role="group" aria-labelledby="adjuster-label" id="adjuster-group">
+      <button type="button" data-adjuster="ADJ-014" aria-pressed="true">ADJ-014</button>
+      <button type="button" data-adjuster="ADJ-027" aria-pressed="false">ADJ-027</button>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+  <div class="empty-state" id="empty-state">
+    <h1>Ask a claims question</h1>
+    <p>
+      Every answer is grounded in and cited to your claim and policy documents.
+      If the documents don't support an answer, ClaimContext says so instead of guessing.
+    </p>
+  </div>
+</main>
+
+<div class="composer">
+  <form id="ask-form" autocomplete="off">
+    <input
+      type="text"
+      id="query-input"
+      name="query"
+      placeholder="e.g. For claim CLM-1004, is the wind-driven rain damage covered?"
+      aria-label="Ask a claims question"
+      required
+    >
+    <button type="submit" id="send-button">Ask</button>
+  </form>
+  <div class="hint">Each question is answered independently — no memory of prior questions is sent.</div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var state = { adjusterId: "ADJ-014" };
+
+  var main = document.getElementById("main");
+  var emptyState = document.getElementById("empty-state");
+  var form = document.getElementById("ask-form");
+  var input = document.getElementById("query-input");
+  var sendButton = document.getElementById("send-button");
+  var adjusterGroup = document.getElementById("adjuster-group");
+
+  adjusterGroup.addEventListener("click", function (evt) {
+    var btn = evt.target.closest("button[data-adjuster]");
+    if (!btn) return;
+    state.adjusterId = btn.getAttribute("data-adjuster");
+    var buttons = adjusterGroup.querySelectorAll("button");
+    for (var i = 0; i < buttons.length; i++) {
+      buttons[i].setAttribute("aria-pressed", buttons[i] === btn ? "true" : "false");
+    }
+  });
+
+  function escapeHtml(s) {
+    var div = document.createElement("div");
+    div.textContent = s;
+    return div.innerHTML;
+  }
+
+  function buildCitations(citations) {
+    if (!citations || citations.length === 0) return "";
+    var html = '<div class="citations"><span class="citations-label">Sources</span>';
+    for (var i = 0; i < citations.length; i++) {
+      var c = citations[i];
+      var excerptId = "excerpt-" + Math.random().toString(36).slice(2);
+      html +=
+        '<button type="button" class="citation-tab" data-target="' + excerptId + '">' +
+          '<div class="citation-doc">' + escapeHtml(c.doc_id) + '</div>' +
+          '<div class="citation-loc">p.' + escapeHtml(String(c.page)) +
+            (c.section ? " § " + escapeHtml(c.section) : "") + '</div>' +
+          '<div class="citation-excerpt" id="' + excerptId + '" hidden>' + escapeHtml(c.text_excerpt) + '</div>' +
+        '</button>';
+    }
+    html += "</div>";
+    return html;
+  }
+
+  main.addEventListener("click", function (evt) {
+    var tab = evt.target.closest(".citation-tab");
+    if (!tab) return;
+    var id = tab.getAttribute("data-target");
+    var excerpt = document.getElementById(id);
+    if (excerpt) excerpt.hidden = !excerpt.hidden;
+  });
+
+  function addExchange(query, adjusterId) {
+    if (emptyState.parentNode) emptyState.remove();
+
+    var exchange = document.createElement("div");
+    exchange.className = "exchange";
+
+    var qEl = document.createElement("div");
+    qEl.className = "question";
+    qEl.innerHTML = escapeHtml(query) + '<span class="meta">Acting as ' + escapeHtml(adjusterId) + "</span>";
+
+    var aEl = document.createElement("div");
+    aEl.className = "answer-card pending";
+    aEl.innerHTML = '<span class="pending-dots">Retrieving and generating</span>';
+
+    exchange.appendChild(qEl);
+    exchange.appendChild(aEl);
+    main.appendChild(exchange);
+    exchange.scrollIntoView({ block: "end", behavior: "smooth" });
+    return aEl;
+  }
+
+  function renderAnswer(target, data) {
+    target.classList.remove("pending");
+    if (data.refused) {
+      target.classList.add("refused");
+    }
+    target.innerHTML =
+      '<div class="answer-text">' + escapeHtml(data.answer) + "</div>" +
+      buildCitations(data.citations);
+  }
+
+  function renderTransportError(target) {
+    target.outerHTML =
+      '<div class="error-card">Couldn’t reach ClaimContext. Check your connection and try again.</div>';
+  }
+
+  form.addEventListener("submit", function (evt) {
+    evt.preventDefault();
+    var query = input.value.trim();
+    if (!query) return;
+
+    var adjusterId = state.adjusterId;
+    var target = addExchange(query, adjusterId);
+
+    input.value = "";
+    input.disabled = true;
+    sendButton.disabled = true;
+
+    fetch("/ask", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query: query, adjuster_id: adjusterId }),
+    })
+      .then(function (resp) {
+        if (!resp.ok) throw new Error("transport");
+        return resp.json();
+      })
+      .then(function (data) {
+        renderAnswer(target, data);
+      })
+      .catch(function () {
+        renderTransportError(target);
+      })
+      .finally(function () {
+        input.disabled = false;
+        sendButton.disabled = false;
+        input.focus();
+      });
+  });
+})();
+</script>
+
+</body>
+</html>
