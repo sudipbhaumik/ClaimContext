@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 from pathlib import Path
 
 from claimcontext.auth.entitlement import EntitlementScope, build_entitlement_scope
@@ -38,6 +39,25 @@ log = logging.getLogger(__name__)
 
 _EXCERPT_LEN = 200
 _PROMPT_VERSION = "rag_v1.txt"
+
+# Moved here from agent/routing.py (spec-grounding-robustness, KI-1): ask.py
+# now needs claim-ID extraction too (_filter_same_claim, below), and
+# routing.py already imports from ask.py — importing the other direction
+# would be circular. ask.py is the lower layer (routing depends on it, not
+# the reverse), so this is the correct home; routing.py now imports it from
+# here instead of defining it.
+_CLAIM_ID_PATTERN = re.compile(r"\bCLM-\d{4}\b", re.IGNORECASE)
+
+
+def extract_claim_ids(query: str) -> list[str]:
+    """Regex-extract claim numbers (e.g. "CLM-1004") literally named in the query.
+
+    Advisory only — a miss (no claim number found) is not a security gap, it just
+    means the cross-entitlement pre-filter (routing.py) or the same-claim filter
+    (_filter_same_claim, below) has nothing to check and the query proceeds
+    normally, where ask()'s EntitlementScope remains the real authorization gate.
+    """
+    return sorted({m.group(0).upper() for m in _CLAIM_ID_PATTERN.finditer(query)})
 
 # §6B: the refusal message must not disclose whether records exist.
 # "I don't have enough relevant information" is true and non-disclosing — it does not
@@ -146,6 +166,44 @@ def _assemble_context(results: list[RetrievalResult]) -> str:
 def _load_prompt(prompts_dir: str) -> str:
     path = Path(prompts_dir) / _PROMPT_VERSION
     return path.read_text(encoding="utf-8")
+
+
+# ── Step 3.5: same-claim consistency filter (KI-1, spec-grounding-robustness) ──
+# Closes ONE specific failure: a chunk from a DIFFERENT claim than the one the
+# query names clearing rerank and getting cited in the final answer (q08 cited
+# CLM-1003-estimate while being asked about CLM-1004). It does NOT close the
+# related-but-distinct KI-10 failure — a chunk from the SAME claim but the
+# WRONG subtopic outscoring the correct evidence. A same-claim filter cannot
+# catch that by construction: the wrong chunk IS the same claim, so it passes
+# straight through. See KNOWN_ISSUES.md KI-1 and KI-10 before assuming this
+# function protects against grounding contamination generally — it only
+# closes the cross-claim case.
+
+
+def _filter_same_claim(
+    reranked: list[RetrievalResult], query: str
+) -> list[RetrievalResult]:
+    """Drop reranked chunks that belong to a different claim than the one(s)
+    the query names. A no-op when the query doesn't name a claim number —
+    the filter only activates for claim-scoped questions.
+
+    Chunks with claim_number=None (policies, endorsements — not tied to any
+    single claim) always pass through: they are not "for" a specific claim
+    and cannot contradict the one named in the query, so excluding them
+    would drop legitimately relevant reference material, not contamination.
+
+    A query naming more than one claim (e.g. a genuinely multi-claim
+    question that reached ask() directly rather than via the agent's
+    decompose path) keeps chunks belonging to ANY of the named claims —
+    this filter narrows to "one of the claims actually asked about," not to
+    exactly one.
+    """
+    claim_ids = extract_claim_ids(query)
+    if not claim_ids:
+        return reranked
+
+    allowed = set(claim_ids)
+    return [r for r in reranked if r.claim_number is None or r.claim_number in allowed]
 
 
 # ── Step 3–5: ask() — retrieve → rerank → refuse → context → LLM → AskResult ─
@@ -323,6 +381,15 @@ def _ask_impl(
     # ── Step 4: rerank + refuse gate ─────────────────────────────────────────
     if reranker is not None:
         reranked = reranker.rerank(query, results)
+
+        # KI-1 same-claim filter — must run BEFORE top_score is read. A chunk
+        # from a different claim than the one named in the query is dropped
+        # here; top_score is computed from what SURVIVES the filter, never
+        # from the original reranked[0] — otherwise a since-dropped chunk's
+        # score could wrongly gate the refuse decision on evidence that's no
+        # longer in play. See _filter_same_claim's docstring for exactly
+        # what this does and does not catch (KI-1 vs. KI-10).
+        reranked = _filter_same_claim(reranked, query)
         top_score = reranked[0].score if reranked else -1.0
 
         log.info(

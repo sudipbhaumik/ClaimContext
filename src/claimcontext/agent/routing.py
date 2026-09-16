@@ -48,7 +48,6 @@ a real logic error in entitlement resolution must propagate loudly.
 from __future__ import annotations
 
 import logging
-import re
 from typing import Literal
 
 from qdrant_client import QdrantClient
@@ -61,6 +60,7 @@ from claimcontext.config import Settings
 from claimcontext.retrieval.ask import (  # noqa: PLC2701 — intentional reuse, see module docstring
     _audit,
     _query_hash,
+    extract_claim_ids,
 )
 from claimcontext.retrieval.errors import LLMError
 from claimcontext.retrieval.llm_client import LLMClient
@@ -78,8 +78,6 @@ QDRANT_RETRYABLE_EXCEPTIONS = (
     ConnectionError,
     TimeoutError,
 )
-
-_CLAIM_ID_PATTERN = re.compile(r"\bCLM-\d{4}\b", re.IGNORECASE)
 
 _SCOPE_CHECK_SYSTEM = (
     "You classify whether a question is about insurance claims, policies, "
@@ -118,14 +116,6 @@ _DECOMPOSE_SYSTEM = (
 )
 
 
-def extract_claim_ids(query: str) -> list[str]:
-    """Regex-extract claim numbers (e.g. "CLM-1004") literally named in the query.
-
-    Advisory only — a miss (no claim number found) is not a security gap, it just
-    means the cross-entitlement pre-filter has nothing to check and the query
-    routes through normally, where ask()'s EntitlementScope is the real gate.
-    """
-    return sorted({m.group(0).upper() for m in _CLAIM_ID_PATTERN.finditer(query)})
 
 
 def _claim_owner(claim_id: str, settings: Settings) -> tuple[str, str] | None:

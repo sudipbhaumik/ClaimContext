@@ -17,8 +17,8 @@ options-and-tradeoffs pass, not a reflexive patch mid-spec.
 
 | ID | Severity | Summary | Affects | Status |
 |---|---|---|---|---|
-| KI-1 | **High** | Refuse gate can open on the wrong evidence, producing a confident, cross-contaminated answer | q08 | Deferred |
-| KI-2 | **High** | Terse adjuster-note shorthand is unfindable by the cross-encoder against natural-language questions | q02, q05, q06, q08 | Deferred |
+| KI-1 | **High** | Cross-claim citation contamination — a different claim's chunk reaching the final answer | q08 (contamination half) | **Fixed** (`spec-grounding-robustness`) |
+| KI-2 | **High** | Terse adjuster-note shorthand is unfindable by the cross-encoder against natural-language questions | q02, q05, q06, q08, `test_proof4_composition_preserves_claim_provenance` (xfail) | **Parked** — fix attempted, ineffective AND regressed policy retrieval, fully reverted; real fix needs ingestion changes |
 | KI-3 | Medium | Generation hedges instead of reasoning about informative absence | q06 | Deferred |
 | KI-4 | Low | RAGAS scoring concurrency breaks against local Ollama at full scale | — (infra) | Deferred |
 | KI-5 | Low | Judge-bias delta (same-family vs. different-family score comparison) not measured | — (infra) | Deferred |
@@ -26,41 +26,59 @@ options-and-tradeoffs pass, not a reflexive patch mid-spec.
 | KI-7 | Low | Reasoning-model judge (`gpt-5-mini`) has recurring token-budget friction | — (infra) | Deferred |
 | KI-8 | Medium | Cross-cutting: literal/substring matching is brittle against paraphrase — recurs at every layer that uses it | q02, q05, q06, q08 (KI-2 root cause) + spec-5a Tier-3 routing | Deferred |
 | KI-9 | **High** | The network cannot be trusted to fail fast — every external client needs its own explicit timeout | `_claim_owner()` (routing.py), `EntitlementScope.collect_allowed_ids()` (entitlement.py) | **Fixed** (spec-7b) |
+| KI-10 | **High** | Refuse gate can open on a same-claim, wrong-subtopic chunk — the gate-opening half of KI-1, not fixed by KI-1's same-claim filter | q08 | Deferred |
 
 ---
 
-### KI-1 — Grounding gate gap: threshold-on-top-score misses wrong-subtopic context
+### KI-1 — Grounding gate gap: cross-claim citation contamination
 
-**Root cause:** The refuse gate asks "does the top candidate clear
-`refuse_threshold`" — not "does the retrieved set contain what's needed to answer
-*this* question." Those are different axes (relevance-to-claim vs.
-relevance-to-question) that a single similarity score collapses into one number. When
-a same-claim, wrong-sub-topic chunk scores high enough to open the gate while the
-actual answer-bearing chunk (buried by KI-2) never reaches the LLM, the system doesn't
-refuse — it answers, ungrounded, sometimes blending in a **different claim's**
-content entirely.
+**Scope corrected during `spec-grounding-robustness`.** q08 was originally
+described here as one failure ("threshold-on-top-score misses wrong-subtopic
+context... sometimes blending in a different claim's content"). Re-tracing
+the actual evidence against the golden-set entry showed q08 exhibits **two
+distinct failures** in the same run, not one — a same-claim, wrong-subtopic
+gate-opening failure, and a separate cross-claim citation failure. They need
+different fixes. The gate-opening failure is now tracked separately as
+**KI-10** (structurally cannot be caught by a same-claim filter). This entry
+is narrowed to the cross-claim citation failure only, which is what the
+same-claim/same-entity consistency check built in `spec-grounding-robustness`
+actually closes.
 
-**Evidence (q08):** `CLM-1004-fnol` scored 0.86 (wrong sub-topic, opens gate);
-`CLM-1004-notes` (contains the literal adjuster conclusion) scored 0.0001, ranked
-12th/30, never reached `rerank_top_n=5`. Generated answer cited `CLM-1003-estimate` —
-a different claim. RAGAS confirmed: `context_precision=0.0, context_recall=0.0,
-answer_relevance=0.0`. Non-deterministic: a later run of the same question answered
-correctly (LLM sampling variance on a borderline retrieval set) — the underlying gap
-is unchanged, it just didn't trigger that run.
+**Root cause:** a chunk from a *different* claim than the one the query names
+can still reach `rerank_top_n` and get cited in the final answer — the refuse
+gate's threshold check has no concept of "does this evidence belong to the
+claim being asked about," only "did it score high enough."
 
-**Affects:** q08. (Structurally could affect any claim-scoped question where a
-wrong-subtopic same-claim chunk outscores the correct one.)
+**Evidence (q08):** the generated answer cited `CLM-1003-estimate` — a
+different claim than `CLM-1004`, the claim q08's question names — despite
+`CLM-1003-estimate` never being part of the correct evidence set. (The
+*other* half of q08's original evidence — `CLM-1004-fnol` wrongly outscoring
+`CLM-1004-notes` — is KI-10, not this issue.)
 
-**Candidate fix — open, none chosen:**
-- Query-aware context-sufficiency check — not straightforward: the gate has no way to
-  know at query time which chunk is "the" answer; that's golden-set knowledge.
-- Same-claim/same-entity consistency check — would catch q08's cross-claim
-  contamination specifically, but is a narrow heuristic (claim-scoped questions only).
-- Output-faithfulness gating (verify citations support the answer, post-generation) —
-  catches it downstream, costs a second LLM call.
-- Fix retrieval at the root (see KI-2) — may resolve q08 without any gate change.
+**Affects:** q08 (citation-contamination half).
 
-**Status:** Deferred to a dedicated grounding-robustness / retrieval-quality spec.
+**Fix (`spec-grounding-robustness`):** `_filter_same_claim()` in
+`retrieval/ask.py` — a same-claim/same-entity consistency check. When a
+query names a specific claim, every chunk surviving rerank must carry that
+same `claim_number` (or `None`, for claim-agnostic reference material like
+policies/endorsements) before the threshold check; a mismatch is dropped,
+and if that empties the candidate set, the query refuses. `top_score` for
+the refuse-threshold check is computed from the filtered list, never the
+original reranked list, so a since-dropped chunk's score can't wrongly gate
+the decision. **This fix does not address KI-10** — verified directly: run
+against a synthetic same-claim-wrong-subtopic case, the filter passes both
+chunks through unchanged, exactly as expected.
+
+**Verified live:** the flagship q08 query (`ask()`, `ADJ-027`,
+"What did the adjuster conclude about coverage for CLM-1004...") returned
+citations `['CLM-1004-fnol', 'CLM-1004-estimate', 'CLM-1004-letter',
+'POL-5504-policy']` — no `CLM-1003` chunk, the exact contamination this
+fix targets. Unit-level proof (deterministic, not dependent on LLM/retrieval
+variance): cross-claim chunk dropped, same-claim and `claim_number=None`
+chunks kept, no-claim-named queries pass through as a no-op.
+
+**Status:** Fixed. See KI-10 for the separate, still-open gate-opening case
+this fix does not address.
 
 ---
 
@@ -87,13 +105,51 @@ known exceptions.
 - *Dangerous* (q08): a different, wrong-subtopic chunk clears threshold instead →
   see KI-1.
 
-**Candidate fix:** Index `section + text` for dense embeddings (BM25 already does
-this per spec-2b) to close the embedding-side asymmetry, and/or investigate whether a
-different reranker or reranking strategy handles terse/shorthand text better. Same
-cross-cutting seam flagged in spec-2c/spec-3 ("Section-Identifier Indexing Gap" in
-`docs/BUILD-JOURNAL.md`).
+**Candidate fix #1 — tried, empirically confirmed ineffective:** index
+`section + text` for dense embeddings, mirroring `reranker.py`'s own
+`f"{section} {text}".strip() if section else text` concatenation exactly
+(implemented in `spec-grounding-robustness`, `ingestion/pipeline.py`).
+**Live re-measurement after a full reindex showed zero score change** —
+q02/q05/q08's top-candidate scores were byte-identical to the pre-fix
+numbers above. Root cause: `chunker.py` sets `section=""` unconditionally
+for every `claim_note` chunk (`chunker.py` line ~303 — notes are chunked via
+`_chunk_notes()`, which never runs heading detection at all). Since every
+piece of KI-2's evidence (`CLM-1003-notes`, `CLM-1001-notes`,
+`CLM-1004-notes`) *is* a claim-note chunk, the fix's `if section else text`
+branch always fell through to plain text — for exactly the chunks it was
+meant to fix. The reranker has this identical blind spot (it was the format
+being mirrored), and BM25's earlier "already does this" claim doesn't hold
+up either — BM25 finds notes (when it does) via literal term overlap in the
+note text itself, not because of a section-label anchor.
 
-**Status:** Deferred to the same grounding-robustness / retrieval-quality spec as KI-1.
+**The code change was initially kept ("does no harm") — that claim was
+wrong, and the fix was fully reverted once measured.** Re-embedding the
+full corpus both ways and comparing cosine scores directly showed the
+section-prefix change actively regressed an unrelated query:
+`POL-3301-policy`'s best rank for "what perils are covered under policy
+POL-3301?" moved from **7th** (inside `top_k=10`, `test_proof1_coverage_
+question_returns_relevant_chunks` passes) to **12th** (outside `top_k`,
+test fails) — confirmed via the same live re-embedding methodology, not
+theorized. The section-label prefix pulled *other* policy chunks' embeddings
+closer to unrelated queries, displacing this one. No benefit to KI-2's own
+evidence (confirmed above) plus a measured cost elsewhere is not a
+change worth keeping under any framing. `ingestion/pipeline.py` reverted to
+plain `c.text` embedding; `chunker_version` reverted to `v1`; corpus
+re-reindexed and the regression confirmed gone (`POL-3301-policy` back to
+7th, both previously-failing tests pass again).
+
+**Candidate fix #2 — not attempted, requires ingestion pipeline changes,
+parked:** claim-note chunks need *some* anchor other than a section heading
+that doesn't exist for them — e.g. synthesizing a label from `doc_type` +
+the note's own opening context, or restructuring `_chunk_notes()` to derive
+a pseudo-section from note structure (note entries often have their own
+internal markers, e.g. `[NOTE-1003-01] 2026-03-05 — ADJ-027`, which could
+seed a label). This is real ingestion-pipeline design work, not a small
+patch — parked rather than attempted under this spec's original scope.
+
+**Status:** Parked, fully reverted (nothing from fix #1 remains in the
+codebase). Fix #2 is scoped but not started, deferred to a future
+ingestion-focused spec (not yet assigned a name/number).
 
 ---
 
@@ -217,6 +273,49 @@ audited at construction time, not discovered via a 9.5-hour surprise.
 
 **Status:** Fixed (the two identified gaps). Listed here rather than only in a
 spec handoff because the lesson is cross-cutting, matching KI-8's convention.
+
+---
+
+### KI-10 — Refuse gate can open on a same-claim, wrong-subtopic chunk
+
+**Root cause:** identical mechanism to KI-1's original description, but this
+is the half of it that a same-claim consistency check structurally cannot
+catch. `CLM-1004-fnol` (wrong subtopic, but genuinely part of claim
+`CLM-1004` — the same claim the query names) scored 0.86 and cleared
+`refuse_threshold`, while `CLM-1004-notes` (the correct evidence, also
+`CLM-1004`) scored 0.0001 and never reached `rerank_top_n`. A filter that
+only checks "does this chunk belong to the claim named in the query" passes
+`CLM-1004-fnol` straight through — it *is* that claim, just the wrong section
+of it.
+
+**Split from KI-1 during `spec-grounding-robustness`:** KI-1 originally
+described q08 as citing "a different claim's content," which is true, but
+q08 actually exhibits two distinct failures in the same run — a same-claim
+gate-opening failure (this issue) and a separate cross-claim citation
+failure (KI-1, as scoped after the split). KI-1's same-claim filter, built in
+`spec-grounding-robustness`, closes the cross-claim case. It does not, and
+structurally cannot, close this one. Filed as its own ID rather than left as
+a note inside a spec's handoff specifically so it stays visible in
+`KNOWN_ISSUES.md` after that spec closes and its handoff is no longer the
+active planning surface.
+
+**Affects:** q08 (gate-opening half).
+
+**Candidate fix — open, none chosen, carried forward from KI-1's original
+list:**
+- Query-aware context-sufficiency check — the gate has no way to know at
+  query time which chunk is "the" answer; that's golden-set knowledge.
+- Output-faithfulness gating (verify citations support the answer, post-
+  generation) — catches it downstream, costs a second LLM call.
+- `spec-grounding-robustness`'s KI-2 fix (embedding `section + text` for
+  dense retrieval) may reduce how often this triggers by making
+  `CLM-1004-notes` easier to find in the first place, but does not
+  structurally prevent a wrong-subtopic same-claim chunk from ever
+  outscoring the correct one again — measured, not assumed, in that spec's
+  proofs.
+
+**Status:** Deferred. Not owned by a specific future spec yet — surface at
+the next planning pass.
 
 ---
 

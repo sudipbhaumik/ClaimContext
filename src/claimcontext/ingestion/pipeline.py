@@ -182,6 +182,18 @@ def run_chunk_embed_upsert(
                 log.warning("no chunks produced for %s — skipping upsert", doc.doc_id)
                 continue
 
+            # KI-2 (spec-grounding-robustness): a "section + text" embedding
+            # was tried here and REVERTED. It measurably did nothing for its
+            # target evidence (claim_note chunks always have section="" —
+            # see chunker.py — so the change was a no-op for exactly the
+            # chunks KI-2 is about), AND it measurably regressed unrelated
+            # policy-document retrieval: POL-3301-policy's best rank for
+            # "what perils are covered under policy POL-3301?" moved from
+            # 7th (in top_k=10, test passes) to 12th (out of top_k, test
+            # fails) — confirmed by re-embedding the full corpus both ways
+            # and comparing cosine scores directly. No benefit, a real cost.
+            # See KNOWN_ISSUES.md KI-2 for the full account and the actual
+            # candidate fix (ingestion changes to _chunk_notes()), not this.
             vectors = embedder.embed([c.text for c in chunks])
 
             # Delete AFTER vectors are in hand — old chunks stay if embed fails.

@@ -124,7 +124,7 @@
   main {
     flex: 1;
     width: 100%;
-    max-width: 760px;
+    max-width: 1040px;
     margin: 0 auto;
     padding: 24px 20px 140px;
     display: flex;
@@ -301,7 +301,7 @@
   }
 
   .composer form {
-    max-width: 760px;
+    max-width: 1040px;
     margin: 0 auto;
     display: flex;
     gap: 10px;
@@ -343,7 +343,7 @@
   .composer button:hover:not(:disabled) { background: #175E5A; }
 
   .hint {
-    max-width: 760px;
+    max-width: 1040px;
     margin: 6px auto 0;
     font-size: 0.7rem;
     color: var(--ink-soft);
@@ -351,7 +351,18 @@
 
   @media (max-width: 480px) {
     main { padding: 16px 14px 150px; }
-    header { padding: 12px 14px; }
+    header {
+      padding: 12px 14px;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 10px;
+    }
+    .adjuster-select {
+      justify-content: space-between;
+      width: 100%;
+    }
+    .segmented { flex: 1; }
+    .segmented button { flex: 1; text-align: center; }
     .question { max-width: 92%; }
     .citation-tab { max-width: 100%; flex: 1 1 100%; }
   }
