@@ -68,17 +68,15 @@ from claimcontext.retrieval.reranker import Reranker
 #         options — retrieval-side fix, query-aware sufficiency check, or output-
 #         faithfulness gating — deliberately not chosen yet).
 #
-#   Root cause B — generation does not reason about informative absence:
-#     q06 — the gate correctly retrieves the ONLY evidence that exists (CLM-1005
-#         has no notes by corpus design) and correctly passes it through
-#         (score 0.563, not borderline-low like q02/q05's failures). The system
-#         hedges ("not enough information") instead of stating the true fact
-#         ("no investigation conducted; only FNOL on file"). Unrelated to root
-#         cause A — retrieval did its job here; generation did not.
-#         Remove once BOTH: (a) generation reasons about absence and produces the
-#         informative-absence answer, (b) ground_truth_answer is written for q06
-#         and its expected_behavior is relabeled ANSWER.
-KNOWN_EVAL_EXCEPTIONS: frozenset[str] = frozenset({"q02", "q05", "q06", "q08"})
+#   Root cause B — generation does not reason about informative absence (KI-3):
+#     q06 — RESOLVED (spec-grounding-robustness). Gate correctly retrieved the
+#         ONLY evidence that exists (CLM-1005 has no notes by corpus design) and
+#         correctly passed it through (score 0.563). Generation previously hedged
+#         instead of stating the informative-absence fact; fixed via a targeted
+#         prompt rule (prompts/rag_v2.txt) and verified live — ask() now returns
+#         the correct, cited informative-absence answer. ground_truth_answer
+#         written, expected_behavior relabeled ANSWER. Removed from this set.
+KNOWN_EVAL_EXCEPTIONS: frozenset[str] = frozenset({"q02", "q05", "q08"})
 
 # ── Shared fixtures ────────────────────────────────────────────────────────────
 

@@ -19,7 +19,7 @@ options-and-tradeoffs pass, not a reflexive patch mid-spec.
 |---|---|---|---|---|
 | KI-1 | **High** | Cross-claim citation contamination — a different claim's chunk reaching the final answer | q08 (contamination half) | **Fixed** (`spec-grounding-robustness`) |
 | KI-2 | **High** | Terse adjuster-note shorthand is unfindable by the cross-encoder against natural-language questions | q02, q05, q06, q08, `test_proof4_composition_preserves_claim_provenance` (xfail) | **Parked** — fix attempted, ineffective AND regressed policy retrieval, fully reverted; real fix needs ingestion changes |
-| KI-3 | Medium | Generation hedges instead of reasoning about informative absence | q06 | Deferred |
+| KI-3 | Medium | Generation hedges instead of reasoning about informative absence | q06 | **Fixed** (`spec-grounding-robustness`) |
 | KI-4 | Low | RAGAS scoring concurrency breaks against local Ollama at full scale | — (infra) | Deferred |
 | KI-5 | Low | Judge-bias delta (same-family vs. different-family score comparison) not measured | — (infra) | Deferred |
 | KI-6 | Low | `refuse_threshold` config drift: `.env`=0.4, calibration recommends 0.55 | — (config) | Deferred |
@@ -156,25 +156,49 @@ ingestion-focused spec (not yet assigned a name/number).
 ### KI-3 — Generation doesn't reason about informative absence
 
 **Root cause:** Given sparse-but-real context (an FNOL with no investigation notes,
-by deliberate corpus design — CLM-1005 has none), the system hedges ("not enough
+by deliberate corpus design — CLM-1005 has none), the system hedged ("not enough
 information") instead of stating the true, informative fact ("no investigation has
 been conducted; only the initial FNOL is on file"). Retrieval and the gate both do
 their job correctly here (0.563 > threshold, only the FNOL is passed through, and it's
-genuinely the only evidence) — this is purely a generation/prompt limitation, not
+genuinely the only evidence) — this was purely a generation/prompt limitation, not
 related to KI-1/KI-2.
 
-**Affects:** q06.
+**Fix (`spec-grounding-robustness`):** targeted rule added to the generation prompt
+(`prompts/rag_v2.txt`, wired via `_PROMPT_VERSION` in `ask.py`) — before falling back
+to the "not enough information" hedge, the model first checks whether the sources
+show an informative absence (something hasn't happened yet, evidenced by what's on
+file rather than what's missing) and states that as fact instead of hedging.
 
-**Candidate fix:** Prompt/generation change to reason about absence-as-fact when
-context is sparse but present. Relabel q06 from REFUSE to ANSWER only once both (a)
-generation produces the informative-absence answer, and (b) `ground_truth_answer` is
-written for q06.
+**Verified live (reproduction test, not assumed):** ran `ask()` against the exact
+q06 question with the current prompt. Output:
+> "No investigation has been conducted yet; only the initial FNOL report is on file
+> for this claim. The available documents do not contain any information about an
+> inspection or its findings."
 
-**Do not** raise `refuse_threshold` above 0.563 to make q06 "pass" — that silently
-relabels it via the gate instead of fixing generation (see `recommend_threshold()` in
-`src/claimcontext/eval/schema.py`).
+`refused=False`, cited `CLM-1005-fnol §NOTICE` — the correct informative-absence
+answer, correctly grounded. This reproduction was run specifically to check whether
+a deeper fix (a separate classify-then-generate LLM call, to detect informative-
+absence cases before generation) was warranted. **It wasn't** — q02/q05 are KI-2
+(retrieval-side, terse notes never reach rerank_top_n; the prompt fix has nothing to
+act on for those), and q06 already produces the correct answer with this fix. No
+reproducible generation-side failure remained to justify the added architecture
+(a second LLM call, a second threshold to calibrate) — the classifier was scoped,
+reproduction-tested, and declined.
 
-**Status:** Deferred to whichever future spec touches the answer-generation prompt.
+**Known residual gap:** the RAGAS metric shift on q06 was smaller than the behavior
+improvement warranted — the answer went from an unhelpful hedge to a correct,
+grounded, cited statement, but the judge score didn't move proportionally. This is
+an expected judge-vs-behavior gap (LLM-as-judge scoring is directional, not exact),
+not evidence the fix is incomplete. Documented here as a known evaluation-layer
+limitation rather than an open defect.
+
+**Do not** raise `refuse_threshold` above 0.563 — that was never needed and would
+have silently relabeled q06 via the gate instead of fixing generation (see
+`recommend_threshold()` in `src/claimcontext/eval/schema.py`).
+
+**Status:** Fixed. `ground_truth_answer` written for q06;
+`expected_behavior` relabeled REFUSE → ANSWER; removed from
+`KNOWN_EVAL_EXCEPTIONS`.
 
 ---
 

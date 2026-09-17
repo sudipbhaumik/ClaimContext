@@ -38,7 +38,14 @@ from claimcontext.retrieval.retriever import Retriever
 log = logging.getLogger(__name__)
 
 _EXCERPT_LEN = 200
-_PROMPT_VERSION = "rag_v1.txt"
+# rag_v2 (KI-3, spec-grounding-robustness): adds a rule distinguishing
+# "insufficient sources" from "the sources show an early/sparse claim stage"
+# — the model was hedging ("not enough information") on sparse-but-real
+# context instead of stating the absence as fact. rag_v1.txt kept, not
+# deleted — CLAUDE.md §2A.3: every eval run records which prompt version
+# produced which score, so prior rag_v1 eval history stays attributable and
+# comparable rather than silently overwritten.
+_PROMPT_VERSION = "rag_v2.txt"
 
 # Moved here from agent/routing.py (spec-grounding-robustness, KI-1): ask.py
 # now needs claim-ID extraction too (_filter_same_claim, below), and
