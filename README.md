@@ -225,6 +225,8 @@ Built incrementally, one functional boundary at a time. What exists is real and 
 
 **Open defects:** tracked honestly in `KNOWN_ISSUES.md`, each with a severity, root cause, and status. Several are deliberately deferred rather than patched reflexively — the file explains why for each.
 
+**Full production-readiness assessment:** [`PRODUCTION_CASE_STUDY.md`](PRODUCTION_CASE_STUDY.md) — an honest accounting of what's verified vs. inferred, real failure/recovery cases, and what's missing before this could carry live traffic.
+
 ---
 
 ## Engineering notes — what this demonstrates
